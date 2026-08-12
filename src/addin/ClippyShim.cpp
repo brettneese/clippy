@@ -66,6 +66,9 @@ HRESULT InvokeByName(IDispatch* object,
                      UINT argumentCount,
                      VARIANT* result)
 {
+    if (result != NULL) {
+        VariantInit(result);
+    }
     if (object == NULL) {
         return E_POINTER;
     }
@@ -91,9 +94,6 @@ HRESULT InvokeByName(IDispatch* object,
     VARIANT localResult;
     VariantInit(&localResult);
     VARIANT* output = result != NULL ? result : &localResult;
-    if (result != NULL) {
-        VariantInit(result);
-    }
 
     EXCEPINFO exceptionInfo;
     ZeroMemory(&exceptionInfo, sizeof(exceptionInfo));
@@ -121,6 +121,39 @@ HRESULT GetDispatchProperty(IDispatch* object,
     VARIANT result;
     HRESULT hr = InvokeByName(object, memberName, DISPATCH_PROPERTYGET,
                               NULL, 0, &result);
+    if (SUCCEEDED(hr)) {
+        if (result.vt == VT_DISPATCH && result.pdispVal != NULL) {
+            *value = result.pdispVal;
+            (*value)->AddRef();
+        } else if (result.vt == VT_UNKNOWN && result.punkVal != NULL) {
+            hr = result.punkVal->QueryInterface(
+                IID_IDispatch, reinterpret_cast<void**>(value));
+        } else {
+            hr = DISP_E_TYPEMISMATCH;
+        }
+    }
+    VariantClear(&result);
+    return hr;
+}
+
+HRESULT GetIndexedDispatch(IDispatch* collection,
+                           LONG index,
+                           IDispatch** value)
+{
+    if (value == NULL) {
+        return E_POINTER;
+    }
+    *value = NULL;
+
+    VARIANT argument;
+    VariantInit(&argument);
+    argument.vt = VT_I4;
+    argument.lVal = index;
+
+    VARIANT result;
+    HRESULT hr = InvokeByName(
+        collection, L"Item", DISPATCH_METHOD | DISPATCH_PROPERTYGET,
+        &argument, 1, &result);
     if (SUCCEEDED(hr)) {
         if (result.vt == VT_DISPATCH && result.pdispVal != NULL) {
             *value = result.pdispVal;
@@ -200,6 +233,265 @@ std::wstring Trim(const std::wstring& text)
     }
     const size_t last = text.find_last_not_of(whitespace);
     return text.substr(first, last - first + 1);
+}
+
+struct BalloonMarkup {
+    std::wstring text;
+    LONG listType;
+    std::vector<std::wstring> labels;
+
+    BalloonMarkup() : listType(0) {}
+};
+
+void AppendBalloonLiteral(std::wstring* output,
+                          const std::wstring& text)
+{
+    for (size_t index = 0; index < text.size(); ++index) {
+        const wchar_t character = text[index];
+        // Office uses brace-delimited directives for color, underlining, and
+        // local BMP/WMF references. Full-width braces preserve readability
+        // without allowing model output to inject one of those directives.
+        if (character == L'{') {
+            output->push_back(static_cast<wchar_t>(0xff5b));
+        } else if (character == L'}') {
+            output->push_back(static_cast<wchar_t>(0xff5d));
+        } else {
+            output->push_back(character);
+        }
+    }
+}
+
+bool IsMarkdownEscapable(wchar_t character)
+{
+    return character == L'\\' || character == L'`' ||
+           character == L'*' || character == L'_' ||
+           character == L'[' || character == L']' ||
+           character == L'(' || character == L')' ||
+           character == L'{' || character == L'}' ||
+           character == L'#';
+}
+
+std::wstring FormatInlineMarkdown(const std::wstring& text)
+{
+    std::wstring output;
+    size_t position = 0;
+    while (position < text.size()) {
+        if (text[position] == L'\\' && position + 1 < text.size() &&
+            IsMarkdownEscapable(text[position + 1])) {
+            AppendBalloonLiteral(&output, text.substr(position + 1, 1));
+            position += 2;
+            continue;
+        }
+
+        if (text[position] == L'`') {
+            const size_t close = text.find(L'`', position + 1);
+            if (close != std::wstring::npos && close > position + 1) {
+                output += L"{cf 6}";
+                AppendBalloonLiteral(
+                    &output, text.substr(position + 1, close - position - 1));
+                output += L"{cf 0}";
+                position = close + 1;
+                continue;
+            }
+        }
+
+        const bool strong =
+            position + 1 < text.size() &&
+            ((text[position] == L'*' && text[position + 1] == L'*') ||
+             (text[position] == L'_' && text[position + 1] == L'_'));
+        if (strong) {
+            const std::wstring delimiter = text.substr(position, 2);
+            const size_t close = text.find(delimiter, position + 2);
+            if (close != std::wstring::npos && close > position + 2) {
+                output += L"{ul}{cf 4}";
+                AppendBalloonLiteral(
+                    &output, text.substr(position + 2, close - position - 2));
+                output += L"{cf 0}{ul 0}";
+                position = close + 2;
+                continue;
+            }
+        }
+
+        if (text[position] == L'*' || text[position] == L'_') {
+            const wchar_t delimiter = text[position];
+            const size_t close = text.find(delimiter, position + 1);
+            if (close != std::wstring::npos && close > position + 1) {
+                output += L"{ul}";
+                AppendBalloonLiteral(
+                    &output, text.substr(position + 1, close - position - 1));
+                output += L"{ul 0}";
+                position = close + 1;
+                continue;
+            }
+        }
+
+        if (text[position] == L'[') {
+            const size_t labelEnd = text.find(L']', position + 1);
+            if (labelEnd != std::wstring::npos &&
+                labelEnd + 1 < text.size() && text[labelEnd + 1] == L'(') {
+                const size_t urlEnd = text.find(L')', labelEnd + 2);
+                if (urlEnd != std::wstring::npos && labelEnd > position + 1 &&
+                    urlEnd > labelEnd + 2) {
+                    output += L"{ul}{cf 4}";
+                    AppendBalloonLiteral(
+                        &output,
+                        text.substr(position + 1, labelEnd - position - 1));
+                    output += L"{cf 0}{ul 0} (";
+                    AppendBalloonLiteral(
+                        &output,
+                        text.substr(labelEnd + 2, urlEnd - labelEnd - 2));
+                    output += L")";
+                    position = urlEnd + 1;
+                    continue;
+                }
+            }
+        }
+
+        AppendBalloonLiteral(&output, text.substr(position, 1));
+        ++position;
+    }
+    return output;
+}
+
+std::wstring FormatMarkdownLine(const std::wstring& line)
+{
+    size_t headingLength = 0;
+    while (headingLength < line.size() && headingLength < 3 &&
+           line[headingLength] == L'#') {
+        ++headingLength;
+    }
+    if (headingLength > 0 && headingLength < line.size() &&
+        line[headingLength] == L' ') {
+        return L"{ul}{cf 4}" +
+            FormatInlineMarkdown(line.substr(headingLength + 1)) +
+            L"{cf 0}{ul 0}";
+    }
+    return FormatInlineMarkdown(line);
+}
+
+void SplitLines(const std::wstring& text,
+                std::vector<std::wstring>* lines)
+{
+    size_t start = 0;
+    while (start <= text.size()) {
+        const size_t end = text.find(L'\n', start);
+        std::wstring line = text.substr(
+            start, end == std::wstring::npos ? std::wstring::npos : end - start);
+        if (!line.empty() && line[line.size() - 1] == L'\r') {
+            line.erase(line.size() - 1);
+        }
+        lines->push_back(line);
+        if (end == std::wstring::npos) {
+            break;
+        }
+        start = end + 1;
+    }
+}
+
+bool ParseListItem(const std::wstring& line,
+                   LONG* listType,
+                   std::wstring* item)
+{
+    size_t position = 0;
+    while (position < line.size() &&
+           (line[position] == L' ' || line[position] == L'\t')) {
+        ++position;
+    }
+    if (position + 1 < line.size() &&
+        (line[position] == L'-' || line[position] == L'*' ||
+         line[position] == L'+') && line[position + 1] == L' ') {
+        *listType = 1;  // msoBalloonTypeBullets
+        *item = Trim(line.substr(position + 2));
+        return !item->empty();
+    }
+
+    const size_t numberStart = position;
+    while (position < line.size() &&
+           line[position] >= L'0' && line[position] <= L'9') {
+        ++position;
+    }
+    if (position > numberStart && position + 1 < line.size() &&
+        line[position] == L'.' && line[position + 1] == L' ') {
+        *listType = 2;  // msoBalloonTypeNumbers
+        *item = Trim(line.substr(position + 2));
+        return !item->empty();
+    }
+    return false;
+}
+
+std::wstring FormatMarkdownLines(const std::vector<std::wstring>& lines,
+                                 size_t count)
+{
+    std::wstring output;
+    bool inCodeBlock = false;
+    for (size_t index = 0; index < count; ++index) {
+        const std::wstring trimmed = Trim(lines[index]);
+        if (trimmed.size() >= 3 && trimmed.substr(0, 3) == L"```") {
+            inCodeBlock = !inCodeBlock;
+            continue;
+        }
+        if (!output.empty()) {
+            output += L"\r\n";
+        }
+        if (inCodeBlock && !lines[index].empty()) {
+            output += L"{cf 6}";
+            AppendBalloonLiteral(&output, lines[index]);
+            output += L"{cf 0}";
+        } else {
+            output += FormatMarkdownLine(lines[index]);
+        }
+    }
+    while (output.size() >= 2 &&
+           output.substr(output.size() - 2) == L"\r\n") {
+        output.erase(output.size() - 2);
+    }
+    return output;
+}
+
+BalloonMarkup FormatBalloonMarkup(const std::wstring& markdown)
+{
+    BalloonMarkup result;
+    std::vector<std::wstring> lines;
+    SplitLines(markdown, &lines);
+    while (!lines.empty() && Trim(lines.back()).empty()) {
+        lines.pop_back();
+    }
+
+    size_t listStart = lines.size();
+    LONG listType = 0;
+    for (size_t index = 0; index < lines.size(); ++index) {
+        LONG candidateType = 0;
+        std::wstring candidate;
+        if (ParseListItem(lines[index], &candidateType, &candidate)) {
+            listStart = index;
+            listType = candidateType;
+            break;
+        }
+    }
+
+    bool nativeList = listStart < lines.size();
+    std::vector<std::wstring> listItems;
+    if (nativeList) {
+        for (size_t index = listStart; index < lines.size(); ++index) {
+            LONG candidateType = 0;
+            std::wstring candidate;
+            if (!ParseListItem(lines[index], &candidateType, &candidate) ||
+                candidateType != listType || listItems.size() >= 5) {
+                nativeList = false;
+                listItems.clear();
+                break;
+            }
+            listItems.push_back(FormatInlineMarkdown(candidate));
+        }
+    }
+
+    result.text = FormatMarkdownLines(
+        lines, nativeList ? listStart : lines.size());
+    if (nativeList) {
+        result.listType = listType;
+        result.labels = listItems;
+    }
+    return result;
 }
 
 void AppendLog(const std::wstring& message)
@@ -1112,6 +1404,7 @@ private:
     void ShowResponse(const std::wstring& heading,
                       const std::wstring& text)
     {
+        const BalloonMarkup markup = FormatBalloonMarkup(text);
         HWND previousShell = shell_;
         DetachHooks();
         if (previousShell != NULL && IsWindow(previousShell)) {
@@ -1144,7 +1437,29 @@ private:
         if (SUCCEEDED(hr) && balloon != NULL) {
             hr = PutString(balloon, L"Heading", heading);
             if (SUCCEEDED(hr)) {
-                hr = PutString(balloon, L"Text", text);
+                hr = PutString(balloon, L"Text", markup.text);
+            }
+            if (SUCCEEDED(hr) && !markup.labels.empty()) {
+                hr = PutLong(balloon, L"BalloonType", markup.listType);
+            }
+            IDispatch* labels = NULL;
+            if (SUCCEEDED(hr) && !markup.labels.empty()) {
+                hr = GetDispatchProperty(balloon, L"Labels", &labels);
+            }
+            for (size_t index = 0;
+                 SUCCEEDED(hr) && index < markup.labels.size(); ++index) {
+                IDispatch* label = NULL;
+                hr = GetIndexedDispatch(
+                    labels, static_cast<LONG>(index + 1), &label);
+                if (SUCCEEDED(hr)) {
+                    hr = PutString(label, L"Text", markup.labels[index]);
+                }
+                if (label != NULL) {
+                    label->Release();
+                }
+            }
+            if (labels != NULL) {
+                labels->Release();
             }
             if (SUCCEEDED(hr)) {
                 hr = PutLong(balloon, L"Button", 1);  // msoButtonSetOK

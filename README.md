@@ -66,9 +66,11 @@ npm start
 
 The server listens on `0.0.0.0:3210` and accepts `POST /message` with a JSON
 body such as `{"text":"hello"}`. It sends each question to the OpenAI Responses
-API as an independent turn and returns the generated plain-text reply in the
-same `{"text":"..."}` response shape. The XP shim reaches it through
-QEMU/UTM's host gateway at `10.0.2.2:3210`.
+API as an independent turn and returns a compact Markdown-lite reply in the
+same `{"text":"..."}` response shape. The XP shim safely maps emphasis, inline
+code, links, headings, and one trailing list to the native formatting supported
+by Office Assistant balloons. The XP shim reaches the server through QEMU/UTM's
+host gateway at `10.0.2.2:3210`.
 
 See the [OpenAI API quickstart](https://developers.openai.com/api/docs/quickstart)
 for API-key setup.

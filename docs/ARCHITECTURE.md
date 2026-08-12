@@ -29,14 +29,16 @@ The first four milestones and the first AI response checkpoint are complete:
 * XP posts the captured text to the macOS TypeScript server
 * Clippy loops his authentic Thinking animation while that request is pending
 * the server sends the text to OpenAI's Responses API with `gpt-5.6-luna`
-* Word renders the model-generated text in a native Assistant balloon
+* Word renders model-generated Markdown-lite with native Assistant balloon
+  colors, underlining, and list labels
 
 The complete live model flow has been visibly verified on the XP desktop and
-independently verified at both HTTP boundaries. This checkpoint is deliberately
-single-turn and text-only. Milestones 5 and 6 remain open: the next work is to
-add controlled host tools, then conversation/session state and richer Clippy
-animation/action responses. Making the XP endpoint configurable also remains a
-protocol follow-up.
+independently verified at both HTTP boundaries. This checkpoint remains
+single-turn, but reply text can now carry a small, safe Markdown presentation
+subset. Milestones 5 and 6 remain open: the next work is to add controlled host
+tools, then conversation/session state and structured Clippy animation/action
+responses. Making the XP endpoint configurable also remains a protocol
+follow-up.
 
 ┌──────────────────────────── macOS ────────────────────────────┐
 │                                                              │
@@ -262,7 +264,7 @@ preserved in `docs/screenshots/clippy-query.png` and
 `docs/screenshots/clippy-echo.png`; the current host-bridge acceptance evidence
 is described under milestone 4.
 
-4. Bridge Clippy to macOS — AI text path implemented
+4. Bridge Clippy to macOS — AI rich-text path implemented
 
 The captured query now crosses the VM boundary as an HTTP request:
 
@@ -283,8 +285,8 @@ XP guest by its current QEMU/UTM network. Connect and send operations retain
 three-second timeouts; receive operations allow 60 seconds for model
 generation. Responses remain limited to 64 KiB. The worker never calls Word
 COM; it places the response into synchronized state, and the existing Word
-UI-thread timer displays it through `Assistant.NewBalloon`. This preserves the
-apartment boundary and avoids freezing Word during network I/O.
+UI-thread timer formats and displays it through `Assistant.NewBalloon`. This
+preserves the apartment boundary and avoids freezing Word during network I/O.
 
 The macOS side lives under `server/` and is a strict TypeScript Node HTTP
 server. It binds `0.0.0.0:3210`, accepts only `POST /message`, validates a
@@ -292,9 +294,9 @@ non-empty string `text` property, and sends it to OpenAI's Responses API. The
 official JavaScript SDK reads `OPENAI_API_KEY`; `CLIPPY_OPENAI_MODEL` selects
 the model and defaults to `gpt-5.6-luna`. Requests use low reasoning effort,
 low text verbosity, a 512-token output ceiling, no tools, no previous response,
-and no response storage. Code-managed instructions keep replies plain-text,
-short, accurate, and lightly in character for the Office balloon. Its bind
-address and port remain configurable with `CLIPPY_SERVER_BIND` and
+and no response storage. Code-managed instructions keep replies short,
+accurate, lightly in character, and within the supported Markdown-lite subset.
+Its bind address and port remain configurable with `CLIPPY_SERVER_BIND` and
 `CLIPPY_SERVER_PORT`; the XP endpoint remains fixed.
 
 Successful responses and failures both return to the UI thread and are
@@ -312,14 +314,34 @@ before rendering the result. Animation automation is intentionally
 best-effort: a character or Office automation failure is logged but does not
 cancel an otherwise valid host request.
 
-The server is stateless and text-only at this checkpoint. Conversation memory,
-tools, host-selected animation/action data, and action buttons remain milestone
-5/6 work. The pending Thinking animation is a fixed XP-side interaction state,
-not a new host protocol field.
-The original echo-path screenshots remain under `docs/screenshots/`; the live
+Rich response rendering is an XP compatibility responsibility. The HTTP
+contract remains `{"text":"..."}`, and the server returns Markdown-lite rather
+than Office-specific control codes. On Word's UI thread, `ClippyShim.dll` maps:
+
+* `**strong**` and level 1-3 headings to dark-blue underlined text
+* `*emphasis*` to underlined text
+* inline and fenced code to dark-cyan text
+* links to a blue underlined label followed by the visible URL
+* one final list of at most five items to native Office bullet or number labels
+
+Office Assistant balloons do not expose arbitrary HTML, RTF, fonts, or inline
+bold. The mapping uses only the documented native `{ul}` and `{cf}` directives
+plus `BalloonType` and `Labels`. Model-provided braces are changed to full-width
+braces before rendering, preventing an answer from injecting Office directives
+or local BMP/WMF references. Unsupported or malformed Markdown remains readable
+literal text. Native lists are limited to the five labels supported by Office;
+a longer, nested, mixed, or non-final list remains inline text.
+
+The server is stateless at this checkpoint. Conversation memory, tools,
+host-selected animation/action data, and action buttons remain milestone 5/6
+work. The pending Thinking animation is a fixed XP-side interaction state, not
+a new host protocol field.
+
+The original echo-path screenshots remain under `docs/screenshots/`. The live
 AI path was freshly verified on the visible UTM desktop with the query `In five
 words, what is retro computing?` and the native response `Old computers,
-software, and games nostalgia.`
+software, and games nostalgia.` Rich Markdown rendering is captured in
+`docs/screenshots/clippy-rich-text.png`.
 
 5. Give Clippy tools
 

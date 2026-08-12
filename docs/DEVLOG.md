@@ -1,5 +1,62 @@
 # Clippy Possession development log
 
+## 2026-08-11 - native rich-text OpenAI replies
+
+Added a safe Markdown-lite renderer to `ClippyShim.dll`. The host still returns
+the stable `{"text":"..."}` response, while the XP compatibility layer maps
+strong emphasis and headings to dark-blue underlined text, emphasis to
+underlining, inline/fenced code to dark cyan, and links to an underlined blue
+label followed by the visible URL. One final Markdown list of at most five
+items becomes Office's native `BalloonType` bullet or number labels.
+
+The renderer emits only Office's documented `{ul}` and `{cf}` directives.
+Every brace originating in the model response becomes a full-width brace before
+rendering, so model output cannot inject Office formatting or the supported
+local `{bmp ...}` / `{wmf ...}` picture references. Longer, nested, mixed, or
+non-final lists stay readable inline rather than being moved into native labels.
+The host instructions now invite only the supported Markdown subset and
+explicitly forbid HTML, images, nested lists, tables, and raw Office
+directives. Added `scripts/diagnostics/test_balloon_markup.vbs` as a direct
+visual probe of the installed Office formatting behavior.
+
+Verified the host and complete XP build:
+
+```sh
+cd server
+npm test
+npm run build
+
+scp src/addin/ClippyShim.cpp windows-xp:'C:/clippy/src/addin/ClippyShim.cpp'
+ssh windows-xp 'cd /d C:\clippy && build.bat'
+ssh windows-xp 'regsvr32 /s C:\clippy\build\ClippyShim.dll'
+```
+
+All seven TypeScript tests passed, and Visual C++ 2010 produced the three
+expected x86/XP targets without warnings. Before integrating the parser, the
+new diagnostic visibly confirmed on Office XP that `{ul}`, `{cf}`, and native
+bullet labels render in an authentic Assistant balloon.
+
+The final visible acceptance used Windows Key+R, `winword.exe`, F1, and
+unmodified Enter. The submitted request asked OpenAI for this exact Markdown:
+
+```text
+**Rich text works.**
+
+- `inline code`
+- *underlined emphasis*
+```
+
+The live host returned that text, `C:\clippy\ClippyShim.log` recorded the query,
+Thinking animation, and response, and a fresh UTM screenshot showed `Rich text
+works.` in blue underline, `inline code` in dark cyan, and `underlined
+emphasis` underlined as two native bullet labels. The visible result is stored
+at `docs/screenshots/clippy-rich-text.png`. UTM Capture Input was not used.
+
+Known limitations: Office Assistant has no arbitrary HTML/RTF, inline bold,
+font, or clickable-link support. Rich formatting is intentionally limited to
+the native Office features above, list labels are capped at five, and replies
+remain single-turn with no tools, streaming, or structured animation/actions.
+
 ## 2026-08-11 - Thinking animation during host requests
 
 Added pending-request feedback to `ClippyShim.dll` using Office Assistant's
