@@ -320,7 +320,8 @@ than Office-specific control codes. On Word's UI thread, `ClippyShim.dll` maps:
 
 * `**strong**` and level 1-3 headings to dark-blue underlined text
 * `*emphasis*` to underlined text
-* inline and fenced code to dark-cyan text
+* inline code to dark-blue text with visible backticks, and fenced code to
+  dark-blue lines with a visible `|` gutter
 * links to a blue underlined label followed by the visible URL
 * one final list of at most five items to native Office bullet or number labels
 
@@ -340,8 +341,9 @@ a new host protocol field.
 The original echo-path screenshots remain under `docs/screenshots/`. The live
 AI path was freshly verified on the visible UTM desktop with the query `In five
 words, what is retro computing?` and the native response `Old computers,
-software, and games nostalgia.` Rich Markdown rendering is captured in
-`docs/screenshots/clippy-rich-text.png`.
+software, and games nostalgia.` Initial rich Markdown rendering is captured in
+`docs/screenshots/clippy-rich-text.png`; the revised code styling is captured in
+`docs/screenshots/clippy-rich-code.png`.
 
 5. Give Clippy tools
 

@@ -1,5 +1,30 @@
 # Clippy Possession development log
 
+## 2026-08-11 - revised code-span styling
+
+Changed the Markdown code mapping after visual feedback showed that Office's
+dark-cyan palette entry reads green against the yellow Assistant balloon and,
+after the Markdown delimiters were removed, did not clearly look like code.
+Inline code now renders in dark blue with its backticks visible. Fenced code
+uses the same dark blue with a visible `|` gutter on each content line. This is
+the clearest available approximation because `Assistant.NewBalloon` cannot set
+a monospace font or code-span background.
+
+Mirrored `src/addin/ClippyShim.cpp` to XP, ran the complete `build.bat`, and
+registered the replacement DLL. Visual acceptance launched Word from Windows
+Key+R, opened the authentic question balloon with F1, and submitted:
+
+```text
+Reply exactly with this Markdown: **Run checks first.** Then on a new
+paragraph: Use `npm test`, then `npm run build`.
+```
+
+The live OpenAI response preserved that Markdown. A fresh screenshot showed
+both commands in dark blue with visible backticks, distinct from the
+blue-underlined strong sentence above them. The shim log recorded the query,
+Thinking animation, and exact response, and the final screenshot is stored at
+`docs/screenshots/clippy-rich-code.png`. UTM Capture Input was not used.
+
 ## 2026-08-11 - native rich-text OpenAI replies
 
 Added a safe Markdown-lite renderer to `ClippyShim.dll`. The host still returns

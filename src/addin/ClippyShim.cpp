@@ -286,10 +286,10 @@ std::wstring FormatInlineMarkdown(const std::wstring& text)
         if (text[position] == L'`') {
             const size_t close = text.find(L'`', position + 1);
             if (close != std::wstring::npos && close > position + 1) {
-                output += L"{cf 6}";
+                output += L"{cf 4}`";
                 AppendBalloonLiteral(
                     &output, text.substr(position + 1, close - position - 1));
-                output += L"{cf 0}";
+                output += L"`{cf 0}";
                 position = close + 1;
                 continue;
             }
@@ -434,7 +434,7 @@ std::wstring FormatMarkdownLines(const std::vector<std::wstring>& lines,
             output += L"\r\n";
         }
         if (inCodeBlock && !lines[index].empty()) {
-            output += L"{cf 6}";
+            output += L"{cf 4}| ";
             AppendBalloonLiteral(&output, lines[index]);
             output += L"{cf 0}";
         } else {
