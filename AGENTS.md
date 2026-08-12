@@ -4,6 +4,12 @@
 
 - Read `docs/ARCHITECTURE.md` before making architectural or implementation changes. Treat it as the source of truth for component boundaries, milestones, and the macOS/XP split; update it when those decisions change.
 - Append a dated entry to `docs/DEVLOG.md` for meaningful implementation, reverse-engineering, build, or validation work. Record what changed, the commands or interaction used to verify it, the observed result, and any remaining limitation.
+- At the end of **every milestone**, update both project documents before the milestone commit:
+
+  1. Update `docs/ARCHITECTURE.md` to mark the milestone's current status and record any changed component boundaries, runtime contracts, architectural decisions, and immediate follow-up work.
+  2. Append a dated entry to `docs/DEVLOG.md` describing the milestone's implementation or findings, the exact build or interaction used to verify it, the observed result, and all known remaining limitations.
+
+  A milestone is not complete until both documents agree with the verified implementation. Do not defer either update to a later milestone.
 - Before finishing a coherent unit of work, run the relevant XP build or validation, review the complete diff, and commit the task's source and documentation changes with a descriptive message. Do not commit generated binaries, runtime logs, temporary files, or unrelated user changes.
 
 ## Current build and run workflow
