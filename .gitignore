@@ -24,6 +24,10 @@ x86/
 dump-*.txt
 index.txt
 
+# Preserve curated captures under documentation.
+!docs/captures/
+!docs/captures/**
+
 # Editor and temporary files
 *.bak
 *.tmp

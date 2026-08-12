@@ -1,5 +1,11 @@
 # Windows XP / Clippy workflow
 
+## Project documentation and commits
+
+- Read `docs/ARCHITECTURE.md` before making architectural or implementation changes. Treat it as the source of truth for component boundaries, milestones, and the macOS/XP split; update it when those decisions change.
+- Append a dated entry to `docs/DEVLOG.md` for meaningful implementation, reverse-engineering, build, or validation work. Record what changed, the commands or interaction used to verify it, the observed result, and any remaining limitation.
+- Before finishing a coherent unit of work, run the relevant XP build or validation, review the complete diff, and commit the task's source and documentation changes with a descriptive message. Do not commit generated binaries, runtime logs, temporary files, or unrelated user changes.
+
 - Use `ssh windows-xp` to prepare files and run diagnostics. Launch GUI programs from the visible XP desktop with UTM Computer Use and **Windows Key->R**; SSH-launched processes may run on an invisible desktop. Do not use computer use when ssh will do.
 - Store short `.vbs` or `.bat` files under `%TEMP%` or `My Documents\Clippy Demo`, and send CRLF (`\r\n`) to the Windows SSH PTY. On this VM, Brett's `%TEMP%` expands to `C:\DOCUME~1\Brett\LOCALS~1\Temp`; it is not `C:\WINDOWS\TEMP`. Check with `echo %TEMP%`, and copy the script into the resolved profile directory before launching it. An `scp` target such as `C:/WINDOWS/TEMP/show.vbs` does not satisfy a later `%TEMP%\show.vbs` launch.
 - Before a demo, check for stale processes with `tasklist | findstr /i "wscript winword agentsvr"`. Close only known demo instances; an SSH-launched Word instance can capture later launches.
