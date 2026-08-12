@@ -19,6 +19,23 @@ Keep the two eras separate:
 
 XP should contain as little modern infrastructure as possible. It acts primarily as Clippy’s body and compatibility environment.
 
+Current Status — 2026-08-11
+
+The first four milestones are complete as an end-to-end echo path:
+
+* native code can control the installed Clippit character
+* the authentic Office Assistant query editor and Search command are identified
+* `ClippyShim.dll` intercepts Search and unmodified Enter inside Word
+* XP posts the captured text to the macOS TypeScript server
+* the server logs and echoes the text
+* Word renders the returned text in a native Assistant balloon
+
+The complete flow has been visibly verified on the XP desktop and independently
+verified at both HTTP boundaries. The project is now ready to replace the echo
+handler with the modern agent. Milestones 5 and 6 remain open. The immediate
+technical follow-ups are to make the XP endpoint configurable and extend the
+response contract beyond `text` to optional animation and action data.
+
 ┌──────────────────────────── macOS ────────────────────────────┐
 │                                                              │
 │  Modern AI Agent                                             │
@@ -76,7 +93,8 @@ Microsoft Agent itself supplies the animated character, while Office adds richer
 
 ClippyShim.dll
 
-A native Win32/x86 component loaded into Office will eventually become the primary integration layer.
+A native Win32/x86 component loaded into Office is the primary XP integration
+layer.
 
 Responsibilities:
 

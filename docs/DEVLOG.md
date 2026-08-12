@@ -1,4 +1,4 @@
-# ClippyProbe development log
+# Clippy Possession development log
 
 ## 2026-08-11 - toolchain inventory
 
@@ -316,3 +316,27 @@ Current limitation: this milestone has a fixed XP endpoint and a text-only
 response contract. The TypeScript server has bind/port environment settings,
 but configuring the XP endpoint and consuming an optional animation command
 remain future work.
+
+## 2026-08-11 - current workflow and milestone status
+
+Consolidated the verified build, deployment, run, transport-diagnostic, and
+visible acceptance sequence in `AGENTS.md`. Future work now has one canonical
+workflow covering the macOS TypeScript build and server, native source mirroring
+to `C:\clippy`, the VS2010 x86 build, per-user add-in registration, the
+independent XP HTTP diagnostic, and the UTM-only Word/Clippy acceptance path.
+
+Updated `docs/ARCHITECTURE.md` with the current project checkpoint. Milestones
+1 through 4 are complete: native Clippit control, authentic Office query UI
+discovery, in-process query interception, and the XP-to-macOS echo bridge have
+all been implemented and visibly verified. The TypeScript server remains an
+echo handler. Milestones 5 and 6—host tools and the general-purpose agent—are
+not yet implemented. The next protocol work is configurable XP endpoint data
+and optional animation/action fields in host responses.
+
+Re-ran the commands documented in the workflow. `npm run build` completed the
+strict TypeScript build, the host curl request returned
+`{"text":"hello from macOS"}`, and `ssh windows-xp 'cd /d C:\clippy &&
+build.bat'` rebuilt all three XP binaries without warnings. The independent
+`test_host_bridge.vbs` diagnostic then returned HTTP 200 and
+`{"text":"hello from Windows XP"}` from the running host server. No generated
+binaries, server output, or runtime logs are part of this documentation change.
