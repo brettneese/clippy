@@ -1,0 +1,7 @@
+* text=auto
+
+# Files copied to Windows XP should keep DOS line endings.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.def text eol=crlf
+*.vbs text eol=crlf

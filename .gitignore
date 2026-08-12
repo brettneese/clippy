@@ -1,0 +1,31 @@
+# macOS metadata
+.DS_Store
+
+# Native build output
+build/
+Debug/
+Release/
+Win32/
+x86/
+.vs/
+*.dll
+*.exe
+*.exp
+*.idb
+*.ilk
+*.lib
+*.obj
+*.pdb
+
+# Runtime output
+*.log
+
+# WindowWatch captures
+dump-*.txt
+index.txt
+
+# Editor and temporary files
+*.bak
+*.tmp
+*~
+~$*
