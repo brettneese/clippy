@@ -27,6 +27,7 @@ The first four milestones and the first AI response checkpoint are complete:
 * the authentic Office Assistant query editor and Search command are identified
 * `ClippyShim.dll` intercepts Search and unmodified Enter inside Word
 * XP posts the captured text to the macOS TypeScript server
+* Clippy loops his authentic Thinking animation while that request is pending
 * the server sends the text to OpenAI's Responses API with `gpt-5.6-luna`
 * Word renders the model-generated text in a native Assistant balloon
 
@@ -302,8 +303,19 @@ HTTP 400, model timeouts return 504, and other model failures return 502. The
 shim parses safe JSON error text and presents it under `Clippy couldn't
 answer:`. The response parser handles UTF-8 and JSON string escapes.
 
+For pending-request feedback, the shim starts Office Assistant's authentic,
+looping `msoAnimationThinking` animation immediately after accepting a query.
+The call is late-bound on Word's UI thread, just like the response balloon; the
+network worker never touches Office COM. When either a response or an error
+reaches the UI timer, the shim resets the Assistant to `msoAnimationIdle`
+before rendering the result. Animation automation is intentionally
+best-effort: a character or Office automation failure is logged but does not
+cancel an otherwise valid host request.
+
 The server is stateless and text-only at this checkpoint. Conversation memory,
-tools, optional animation data, and action buttons remain milestone 5/6 work.
+tools, host-selected animation/action data, and action buttons remain milestone
+5/6 work. The pending Thinking animation is a fixed XP-side interaction state,
+not a new host protocol field.
 The original echo-path screenshots remain under `docs/screenshots/`; the live
 AI path was freshly verified on the visible UTM desktop with the query `In five
 words, what is retro computing?` and the native response `Old computers,

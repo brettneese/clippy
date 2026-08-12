@@ -1,5 +1,50 @@
 # Clippy Possession development log
 
+## 2026-08-11 - Thinking animation during host requests
+
+Added pending-request feedback to `ClippyShim.dll` using Office Assistant's
+authentic, looping `msoAnimationThinking` animation. Query submission still
+starts the HTTP exchange on a background worker, while the Word UI thread now
+sets `Assistant.Visible` and `Assistant.Animation` immediately after accepting
+the query. The existing UI timer resets the animation to `msoAnimationIdle`
+before showing either a successful response or an error balloon. Animation
+failures are logged and remain non-fatal to the host request.
+
+Verified the complete XP build after closing the known visible demo Word
+instance and copying the changed source:
+
+```sh
+scp src/addin/ClippyShim.cpp windows-xp:'C:/clippy/src/addin/ClippyShim.cpp'
+ssh windows-xp 'cd /d C:\clippy && build.bat'
+ssh windows-xp 'regsvr32 /s C:\clippy\build\ClippyShim.dll'
+```
+
+The VS2010 x86/XP build produced all three expected targets and reported
+`OK: built C:\clippy\build\ClippyShim.dll`. The replacement add-in registered
+successfully. A macOS `curl` request to the live TypeScript server also returned
+HTTP 200 before the visible test.
+
+For visible acceptance, launched `winword.exe` through Windows Key+R on the UTM
+desktop, opened the authentic Assistant query balloon with F1, entered `In one
+short sentence, why does Clippy think before answering?`, and submitted with
+unmodified Enter. A fresh screenshot during the request showed Clippy in the
+Thinking animation with the editor text `Asking the Clippy host...`; a later
+screenshot showed the native `Clippy host replied:` balloon with `Clippy thinks
+before answering to make sure the help is accurate and useful.` The shim log
+correlated the interaction at 22:19:56-22:19:58:
+
+```text
+QUERY source=Enter key text=In one short sentence, why does Clippy think before answering?
+ANIMATION started Thinking
+ANIMATION stopped Thinking
+RESPONSE text=Clippy thinks before answering to make sure the help is accurate and useful.
+```
+
+The animation remains a fixed XP-side pending state; the host response protocol
+still carries text only. Reset occurs on the 200 ms Word UI poll, and a failure
+to automate the selected Office Assistant is logged rather than failing the
+network request.
+
 ## 2026-08-11 - toolchain inventory
 
 - Host: Microsoft Windows XP 5.1.2600, x86.

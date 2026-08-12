@@ -51,6 +51,9 @@ const int kConnectTimeoutMs = 3000;
 const int kSendTimeoutMs = 3000;
 const int kReceiveTimeoutMs = 60000;
 const size_t kMaximumResponseBytes = 64 * 1024;
+// Office 10 MsoAnimationType values used through late-bound automation.
+const LONG kMsoAnimationIdle = 1;
+const LONG kMsoAnimationThinking = 24;
 
 HINSTANCE g_module = NULL;
 LONG g_objectCount = 0;
@@ -691,7 +694,8 @@ public:
         : referenceCount_(1), application_(NULL), timer_(0), shell_(NULL),
           content_(NULL), editor_(NULL), oldContentProc_(NULL),
           oldEditorProc_(NULL), networkPending_(false),
-          responseReady_(false), responseSucceeded_(false)
+          responseReady_(false), responseSucceeded_(false),
+          thinkingAnimationActive_(false)
     {
         InitializeCriticalSection(&networkLock_);
         InterlockedIncrement(&g_objectCount);
@@ -867,6 +871,7 @@ private:
             timer_ = 0;
         }
         DetachHooks();
+        StopThinkingAnimation();
         if (g_activeAddIn == this) {
             g_activeAddIn = NULL;
         }
@@ -900,6 +905,7 @@ private:
         }
         LeaveCriticalSection(&networkLock_);
         if (responseReady) {
+            StopThinkingAnimation();
             if (responseSucceeded) {
                 AppendLog(L"RESPONSE text=" + responseText);
                 ShowResponse(L"Clippy host replied:", responseText);
@@ -991,6 +997,9 @@ private:
         responseReady_ = false;
         LeaveCriticalSection(&networkLock_);
 
+        SetWindowTextW(editor_, L"Asking the Clippy host...");
+        StartThinkingAnimation();
+
         NetworkJob* job = new NetworkJob();
         job->owner = this;
         job->query = query;
@@ -1004,6 +1013,7 @@ private:
             EnterCriticalSection(&networkLock_);
             networkPending_ = false;
             LeaveCriticalSection(&networkLock_);
+            StopThinkingAnimation();
             wchar_t message[128];
             _snwprintf(message, sizeof(message) / sizeof(message[0]),
                        L"ERROR CreateThread failed error=%lu",
@@ -1014,9 +1024,62 @@ private:
             return true;
         }
         CloseHandle(thread);
-
-        SetWindowTextW(editor_, L"Asking the Clippy host...");
         return true;
+    }
+
+    void StartThinkingAnimation()
+    {
+        IDispatch* assistant = NULL;
+        HRESULT hr = GetDispatchProperty(application_, L"Assistant", &assistant);
+        if (SUCCEEDED(hr)) {
+            hr = PutBool(assistant, L"Visible", true);
+        }
+        if (SUCCEEDED(hr)) {
+            hr = PutLong(assistant, L"Animation", kMsoAnimationThinking);
+        }
+        if (assistant != NULL) {
+            assistant->Release();
+        }
+
+        thinkingAnimationActive_ = SUCCEEDED(hr);
+        if (thinkingAnimationActive_) {
+            AppendLog(L"ANIMATION started Thinking");
+        } else {
+            wchar_t error[80];
+            _snwprintf(error, sizeof(error) / sizeof(error[0]),
+                       L"ERROR thinking animation failed hr=0x%08lX",
+                       static_cast<unsigned long>(hr));
+            error[(sizeof(error) / sizeof(error[0])) - 1] = L'\0';
+            AppendLog(error);
+        }
+    }
+
+    void StopThinkingAnimation()
+    {
+        if (!thinkingAnimationActive_) {
+            return;
+        }
+
+        IDispatch* assistant = NULL;
+        HRESULT hr = GetDispatchProperty(application_, L"Assistant", &assistant);
+        if (SUCCEEDED(hr)) {
+            hr = PutLong(assistant, L"Animation", kMsoAnimationIdle);
+        }
+        if (assistant != NULL) {
+            assistant->Release();
+        }
+        thinkingAnimationActive_ = false;
+
+        if (SUCCEEDED(hr)) {
+            AppendLog(L"ANIMATION stopped Thinking");
+        } else {
+            wchar_t error[80];
+            _snwprintf(error, sizeof(error) / sizeof(error[0]),
+                       L"ERROR stopping thinking animation failed hr=0x%08lX",
+                       static_cast<unsigned long>(hr));
+            error[(sizeof(error) / sizeof(error[0])) - 1] = L'\0';
+            AppendLog(error);
+        }
     }
 
     static DWORD WINAPI NetworkThreadProc(LPVOID parameter)
@@ -1130,6 +1193,7 @@ private:
     bool networkPending_;
     bool responseReady_;
     bool responseSucceeded_;
+    bool thinkingAnimationActive_;
     std::wstring responseText_;
     std::wstring responseError_;
 };
