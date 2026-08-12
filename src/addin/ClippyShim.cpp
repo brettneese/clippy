@@ -1200,7 +1200,7 @@ private:
             StopThinkingAnimation();
             if (responseSucceeded) {
                 AppendLog(L"RESPONSE text=" + responseText);
-                ShowResponse(L"Clippy host replied:", responseText);
+                ShowResponse(L"Clippy says:", responseText);
             } else {
                 AppendLog(L"ERROR host request failed: " + responseError);
                 ShowResponse(L"Clippy couldn't answer:",
@@ -1289,7 +1289,7 @@ private:
         responseReady_ = false;
         LeaveCriticalSection(&networkLock_);
 
-        SetWindowTextW(editor_, L"Asking the Clippy host...");
+        SetWindowTextW(editor_, L"Asking Clippy...");
         StartThinkingAnimation();
 
         NetworkJob* job = new NetworkJob();

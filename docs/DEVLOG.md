@@ -1,5 +1,22 @@
 # Clippy Possession development log
 
+## 2026-08-11 - user-facing balloon headings
+
+Removed transport terminology from visible Assistant copy. Successful response
+balloons now use `Clippy says:` instead of `Clippy host replied:`, and the query
+editor shows `Asking Clippy...` while a request is pending instead of `Asking
+the Clippy host...`. Internal log and server terminology remain unchanged.
+
+Mirrored `src/addin/ClippyShim.cpp` to XP, ran the complete Visual C++ 2010
+`build.bat`, and registered the replacement DLL. Visible acceptance launched
+Word through Windows Key+R, opened the question balloon with F1, and submitted
+`Reply with exactly: Header wording verified.` using unmodified Enter. The shim
+log recorded `QUERY`, the Thinking animation, and `RESPONSE text=Header wording
+verified.` A fresh screenshot visibly confirmed the `Clippy says:` heading with
+the same response at `docs/screenshots/clippy-says.png`. UTM Capture Input was
+not used. Updated `AGENTS.md` so future acceptance checks require the new
+heading.
+
 ## 2026-08-11 - revised code-span styling
 
 Changed the Markdown code mapping after visual feedback showed that Office's

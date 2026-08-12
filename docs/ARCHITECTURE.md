@@ -253,9 +253,10 @@ The interception path handles an unmodified Enter key in the editor and the
 `BN_CLICKED` notification from control ID `8`, the right-hand Search button.
 It rejects the original placeholder and empty input, logs the captured text to
 `C:\clippy\ClippyShim.log`, suppresses the legacy Help submission, and changes
-the editor immediately to `Asking the Clippy host...`. Milestone 4 owns the
-network request and renders the returned text with Word's native
-`Assistant.NewBalloon` API.
+the editor immediately to `Asking Clippy...`. Milestone 4 owns the network
+request and renders the returned text under the user-facing `Clippy says:`
+heading with Word's native `Assistant.NewBalloon` API. Transport terms such as
+"host" stay out of visible Assistant copy.
 
 The add-in never hard-codes window handles or process IDs, restores each
 original window procedure before detaching, and keeps all Word/Assistant COM
@@ -343,7 +344,8 @@ AI path was freshly verified on the visible UTM desktop with the query `In five
 words, what is retro computing?` and the native response `Old computers,
 software, and games nostalgia.` Initial rich Markdown rendering is captured in
 `docs/screenshots/clippy-rich-text.png`; the revised code styling is captured in
-`docs/screenshots/clippy-rich-code.png`.
+`docs/screenshots/clippy-rich-code.png`; and the current `Clippy says:` heading
+is captured in `docs/screenshots/clippy-says.png`.
 
 5. Give Clippy tools
 

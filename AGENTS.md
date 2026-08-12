@@ -70,7 +70,7 @@
 
   The expected result is HTTP 200 with `{"text":"hello from Windows XP"}`.
 
-- Run the complete visible acceptance path only from the UTM XP desktop: use **Windows Key->R**, launch `winword.exe`, wait for Word and the add-in to load, press F1 to open the authentic Assistant question balloon, enter a unique message, and submit with Search or unmodified Enter. Confirm that the macOS server prints the message, `C:\clippy\ClippyShim.log` records `QUERY` and `RESPONSE`, and a fresh screenshot shows `Clippy host replied:` with the same text.
+- Run the complete visible acceptance path only from the UTM XP desktop: use **Windows Key->R**, launch `winword.exe`, wait for Word and the add-in to load, press F1 to open the authentic Assistant question balloon, enter a unique message, and submit with Search or unmodified Enter. Confirm that the macOS server prints the message, `C:\clippy\ClippyShim.log` records `QUERY` and `RESPONSE`, and a fresh screenshot shows `Clippy says:` with the same text.
 
 ## XP interaction and visible validation
 
