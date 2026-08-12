@@ -10,6 +10,7 @@ modern intelligence and tools will remain on the macOS host.
 src/
   addin/          Word COM add-in and COM export definition
   tools/          Native XP diagnostics and Microsoft Agent probe
+server/            TypeScript HTTP bridge running on the macOS host
 scripts/
   demos/          Visible Clippy demonstrations
   diagnostics/    Microsoft Agent validation and discovery scripts
@@ -47,3 +48,19 @@ regsvr32 /s C:\clippy\build\ClippyShim.dll
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the system design and
 [docs/DEVLOG.md](docs/DEVLOG.md) for verified implementation details.
+
+## Run the host echo server
+
+On macOS, start the TypeScript bridge before submitting a Clippy question:
+
+```sh
+cd server
+npm install
+npm run build
+npm start
+```
+
+The server listens on `0.0.0.0:3210` and accepts `POST /message` with a JSON
+body such as `{"text":"hello"}`. The current milestone prints the message and
+returns the same text. The XP shim reaches it through QEMU/UTM's host gateway
+at `10.0.2.2:3210`.

@@ -42,7 +42,7 @@ cl /nologo /EHsc /W4 /MT /LD /DUNICODE /D_UNICODE ^
   /D_WIN32_WINNT=0x0501 /DWINVER=0x0501 ^
   /Fo"build\ClippyShim.obj" /Fe"build\ClippyShim.dll" ^
   "src\addin\ClippyShim.cpp" ^
-  ole32.lib oleaut32.lib user32.lib advapi32.lib shlwapi.lib ^
+  ole32.lib oleaut32.lib user32.lib advapi32.lib shlwapi.lib ws2_32.lib ^
   "src\addin\ClippyShim.def" ^
   /link /SUBSYSTEM:WINDOWS,5.01
 if errorlevel 1 (

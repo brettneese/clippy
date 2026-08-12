@@ -227,25 +227,24 @@ creating a window of its own. The timer locates the live Assistant hierarchy
 by class name, control ID, and current process ownership, then subclasses both
 `MsoBalloonChild` and its `RichEdit20W` query editor in-process.
 
-The first interception path handles an unmodified Enter key in the editor and
-the `BN_CLICKED` notification from control ID `8`, the right-hand Search
-button. It rejects the original placeholder and empty input, logs the captured
-text to `C:\clippy\ClippyShim.log`, suppresses the legacy Help submission, and
-echoes the query with Word's native `Assistant.NewBalloon` API. The editor is
-also changed immediately to `You said: ...`, providing visible feedback if
-Office refuses to replace its built-in balloon.
+The interception path handles an unmodified Enter key in the editor and the
+`BN_CLICKED` notification from control ID `8`, the right-hand Search button.
+It rejects the original placeholder and empty input, logs the captured text to
+`C:\clippy\ClippyShim.log`, suppresses the legacy Help submission, and changes
+the editor immediately to `Asking the Clippy host...`. Milestone 4 owns the
+network request and renders the returned text with Word's native
+`Assistant.NewBalloon` API.
 
 The add-in never hard-codes window handles or process IDs, restores each
 original window procedure before detaching, and keeps all Word/Assistant COM
-calls on Word's UI thread. Its build, registration, and complete visible path
-have been verified on the XP VM: a fresh Word launch loaded the add-in, Search
-captured `echo from ClippyShim`, and a native balloon displayed `Clippy heard:`
-with the same text. The query and echo states are preserved in
-`docs/screenshots/clippy-query.png` and `docs/screenshots/clippy-echo.png`.
+calls on Word's UI thread. The original local-echo acceptance test is
+preserved in `docs/screenshots/clippy-query.png` and
+`docs/screenshots/clippy-echo.png`; the current host-bridge acceptance evidence
+is described under milestone 4.
 
-4. Bridge Clippy to macOS
+4. Bridge Clippy to macOS — echo path implemented
 
-Send the captured request over the VM network:
+The captured query now crosses the VM boundary as an HTTP request:
 
 XP → Mac
 {"text":"why is my build failing?"}
@@ -254,9 +253,33 @@ and receive:
 
 Mac → XP
 {
-  "text": "Three tests are failing.",
-  "animation": "Explain"
+  "text": "why is my build failing?"
 }
+
+`ClippyShim.dll` starts a short-lived background worker for each accepted
+query, UTF-8 encodes it, and posts it to
+`http://10.0.2.2:3210/message`. `10.0.2.2` is the host gateway exposed to this
+XP guest by its current QEMU/UTM network. Connect, send, and receive operations
+use three-second timeouts, and responses are limited to 64 KiB. The worker
+never calls Word COM; it places the response into synchronized state, and the
+existing Word UI-thread timer displays it through `Assistant.NewBalloon`.
+This preserves the apartment boundary and avoids freezing Word during network
+I/O.
+
+The macOS side lives under `server/` and is a strict TypeScript Node HTTP
+server. It binds `0.0.0.0:3210`, accepts only `POST /message`, validates a
+non-empty string `text` property, logs the message, and currently echoes
+`{"text":"..."}`. Its bind address and port can be changed with
+`CLIPPY_SERVER_BIND` and `CLIPPY_SERVER_PORT`; the XP endpoint remains fixed
+for this milestone.
+
+Successful responses and transport failures both return to the UI thread and
+are rendered in native Office Assistant balloons. The response parser handles
+UTF-8 and JSON string escapes. Animation commands are not yet consumed; adding
+the optional `animation` response field remains part of the next host-agent
+integration step. The complete visible query/response path is preserved in
+`docs/screenshots/clippy-bridge-query.png` and
+`docs/screenshots/clippy-bridge-response.png`.
 
 5. Give Clippy tools
 

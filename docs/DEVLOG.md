@@ -253,3 +253,66 @@ Updated `AGENTS.md` to require consulting `docs/ARCHITECTURE.md`, recording
 meaningful work in this development log, validating the relevant XP path, and
 committing each coherent source-and-documentation change without generated or
 unrelated files.
+
+## 2026-08-11 - XP-to-macOS TypeScript echo bridge
+
+Added `server/src/server.ts`, a strict TypeScript Node HTTP server that listens
+on `0.0.0.0:3210`. It accepts only `POST /message`, requires a non-empty JSON
+`text` string, prints the received message, and returns the same text as JSON.
+The npm project has no runtime dependencies; TypeScript and Node types are
+development-only dependencies used to build `server/dist/server.js`.
+
+Replaced ClippyShim's local echo with a Winsock HTTP client. Captured questions
+are UTF-8/JSON encoded and sent to `10.0.2.2:3210`, the host gateway observed
+from this XP VM. Network I/O runs on a short-lived worker thread with
+three-second timeouts and a 64 KiB response cap. The worker publishes its
+result through a critical section, while Word's existing UI-thread timer alone
+continues to make Office COM calls and show the returned text with
+`Assistant.NewBalloon`. Connection and protocol errors are also shown in a
+native balloon. Added `scripts/diagnostics/test_host_bridge.vbs` for an
+independent XP-side transport check.
+
+Host build and loopback validation:
+
+```text
+cd server
+npm install
+npm run build
+npm start
+curl -H 'Content-Type: application/json' \
+  --data '{"text":"hello from host test"}' \
+  http://127.0.0.1:3210/message
+=> {"text":"hello from host test"}
+```
+
+The independent XP diagnostic was copied to Brett's resolved `%TEMP%` and run
+with `cscript.exe //nologo %TEMP%\test_host_bridge.vbs`. It returned:
+
+```text
+HTTP 200
+{"text":"hello from Windows XP"}
+```
+
+After mirroring `ClippyShim.cpp` and `build.bat` to `C:\clippy`, the complete
+VS2010 x86 `/W4` build passed without warnings. The rebuilt DLL was registered
+per-user, and Word was launched from the visible XP desktop. F1 opened the
+authentic Assistant query balloon; submitting `echo through TypeScript` with
+Search produced this correlated path:
+
+```text
+host: Clippy: echo through TypeScript
+XP:   QUERY source=Search button text=echo through TypeScript
+XP:   RESPONSE text=echo through TypeScript
+XP:   RESPONSE shown with Assistant.NewBalloon
+```
+
+Fresh visible evidence is preserved in
+`docs/screenshots/clippy-bridge-query.png` and
+`docs/screenshots/clippy-bridge-response.png`. The latter shows the native
+balloon heading `Clippy host replied:` and the echoed text. UTM's Capture Input
+control was not used.
+
+Current limitation: this milestone has a fixed XP endpoint and a text-only
+response contract. The TypeScript server has bind/port environment settings,
+but configuring the XP endpoint and consuming an optional animation command
+remain future work.

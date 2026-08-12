@@ -3,6 +3,8 @@
 
 # Native build output
 build/
+server/dist/
+server/node_modules/
 Debug/
 Release/
 Win32/

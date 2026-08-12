@@ -2,10 +2,13 @@
 #define WINVER 0x0501
 #define _CRT_SECURE_NO_WARNINGS
 
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <oleauto.h>
 #include <shlwapi.h>
 
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -42,7 +45,10 @@ const wchar_t kPlaceholder[] =
     L"Type your question here and then click Search.";
 const wchar_t kLogPath[] = L"C:\\clippy\\ClippyShim.log";
 const UINT_PTR kPollIntervalMs = 200;
-const DWORD kEchoDelayMs = 150;
+const char kDefaultServerHost[] = "10.0.2.2";
+const unsigned short kDefaultServerPort = 3210;
+const int kNetworkTimeoutMs = 3000;
+const size_t kMaximumResponseBytes = 64 * 1024;
 
 HINSTANCE g_module = NULL;
 LONG g_objectCount = 0;
@@ -226,6 +232,397 @@ void AppendLog(const std::wstring& message)
     CloseHandle(file);
 }
 
+std::string WideToUtf8(const std::wstring& text)
+{
+    if (text.empty()) {
+        return "";
+    }
+    const int length = WideCharToMultiByte(
+        CP_UTF8, 0, text.data(), static_cast<int>(text.size()),
+        NULL, 0, NULL, NULL);
+    if (length <= 0) {
+        return "";
+    }
+    std::vector<char> buffer(static_cast<size_t>(length));
+    if (WideCharToMultiByte(
+            CP_UTF8, 0, text.data(), static_cast<int>(text.size()),
+            &buffer[0], length, NULL, NULL) != length) {
+        return "";
+    }
+    return std::string(&buffer[0], buffer.size());
+}
+
+std::wstring Utf8ToWide(const std::string& text)
+{
+    if (text.empty()) {
+        return L"";
+    }
+    const int length = MultiByteToWideChar(
+        CP_UTF8, 0, text.data(), static_cast<int>(text.size()), NULL, 0);
+    if (length <= 0) {
+        return L"";
+    }
+    std::vector<wchar_t> buffer(static_cast<size_t>(length));
+    if (MultiByteToWideChar(
+            CP_UTF8, 0, text.data(), static_cast<int>(text.size()),
+            &buffer[0], length) != length) {
+        return L"";
+    }
+    return std::wstring(&buffer[0], buffer.size());
+}
+
+std::string EscapeJsonString(const std::string& text)
+{
+    std::string escaped;
+    escaped.reserve(text.size() + 16);
+    static const char hex[] = "0123456789abcdef";
+    for (size_t index = 0; index < text.size(); ++index) {
+        const unsigned char character =
+            static_cast<unsigned char>(text[index]);
+        switch (character) {
+            case '"': escaped += "\\\""; break;
+            case '\\': escaped += "\\\\"; break;
+            case '\b': escaped += "\\b"; break;
+            case '\f': escaped += "\\f"; break;
+            case '\n': escaped += "\\n"; break;
+            case '\r': escaped += "\\r"; break;
+            case '\t': escaped += "\\t"; break;
+            default:
+                if (character < 0x20) {
+                    escaped += "\\u00";
+                    escaped += hex[(character >> 4) & 0x0f];
+                    escaped += hex[character & 0x0f];
+                } else {
+                    escaped += static_cast<char>(character);
+                }
+                break;
+        }
+    }
+    return escaped;
+}
+
+int HexDigit(char character)
+{
+    if (character >= '0' && character <= '9') {
+        return character - '0';
+    }
+    if (character >= 'a' && character <= 'f') {
+        return character - 'a' + 10;
+    }
+    if (character >= 'A' && character <= 'F') {
+        return character - 'A' + 10;
+    }
+    return -1;
+}
+
+void AppendUtf8CodePoint(std::string* text, unsigned long codePoint)
+{
+    if (codePoint <= 0x7f) {
+        text->push_back(static_cast<char>(codePoint));
+    } else if (codePoint <= 0x7ff) {
+        text->push_back(static_cast<char>(0xc0 | (codePoint >> 6)));
+        text->push_back(static_cast<char>(0x80 | (codePoint & 0x3f)));
+    } else if (codePoint <= 0xffff) {
+        text->push_back(static_cast<char>(0xe0 | (codePoint >> 12)));
+        text->push_back(static_cast<char>(0x80 | ((codePoint >> 6) & 0x3f)));
+        text->push_back(static_cast<char>(0x80 | (codePoint & 0x3f)));
+    } else {
+        text->push_back(static_cast<char>(0xf0 | (codePoint >> 18)));
+        text->push_back(static_cast<char>(0x80 | ((codePoint >> 12) & 0x3f)));
+        text->push_back(static_cast<char>(0x80 | ((codePoint >> 6) & 0x3f)));
+        text->push_back(static_cast<char>(0x80 | (codePoint & 0x3f)));
+    }
+}
+
+bool ParseHexCodeUnit(const std::string& text,
+                      size_t offset,
+                      unsigned long* value)
+{
+    if (offset + 4 > text.size()) {
+        return false;
+    }
+    unsigned long result = 0;
+    for (size_t index = 0; index < 4; ++index) {
+        const int digit = HexDigit(text[offset + index]);
+        if (digit < 0) {
+            return false;
+        }
+        result = (result << 4) | static_cast<unsigned long>(digit);
+    }
+    *value = result;
+    return true;
+}
+
+bool ExtractJsonText(const std::string& json, std::wstring* result)
+{
+    const size_t property = json.find("\"text\"");
+    if (property == std::string::npos) {
+        return false;
+    }
+    size_t position = json.find(':', property + 6);
+    if (position == std::string::npos) {
+        return false;
+    }
+    ++position;
+    while (position < json.size() &&
+           (json[position] == ' ' || json[position] == '\t' ||
+            json[position] == '\r' || json[position] == '\n')) {
+        ++position;
+    }
+    if (position >= json.size() || json[position] != '"') {
+        return false;
+    }
+    ++position;
+
+    std::string decoded;
+    while (position < json.size()) {
+        const char character = json[position++];
+        if (character == '"') {
+            *result = Utf8ToWide(decoded);
+            return !decoded.empty() && !result->empty();
+        }
+        if (character != '\\') {
+            decoded.push_back(character);
+            continue;
+        }
+        if (position >= json.size()) {
+            return false;
+        }
+        const char escape = json[position++];
+        switch (escape) {
+            case '"': decoded.push_back('"'); break;
+            case '\\': decoded.push_back('\\'); break;
+            case '/': decoded.push_back('/'); break;
+            case 'b': decoded.push_back('\b'); break;
+            case 'f': decoded.push_back('\f'); break;
+            case 'n': decoded.push_back('\n'); break;
+            case 'r': decoded.push_back('\r'); break;
+            case 't': decoded.push_back('\t'); break;
+            case 'u': {
+                unsigned long codePoint = 0;
+                if (!ParseHexCodeUnit(json, position, &codePoint)) {
+                    return false;
+                }
+                position += 4;
+                if (codePoint >= 0xd800 && codePoint <= 0xdbff &&
+                    position + 6 <= json.size() &&
+                    json[position] == '\\' && json[position + 1] == 'u') {
+                    unsigned long lowSurrogate = 0;
+                    if (ParseHexCodeUnit(json, position + 2, &lowSurrogate) &&
+                        lowSurrogate >= 0xdc00 && lowSurrogate <= 0xdfff) {
+                        codePoint = 0x10000 +
+                            ((codePoint - 0xd800) << 10) +
+                            (lowSurrogate - 0xdc00);
+                        position += 6;
+                    }
+                }
+                AppendUtf8CodePoint(&decoded, codePoint);
+                break;
+            }
+            default:
+                return false;
+        }
+    }
+    return false;
+}
+
+std::wstring SocketError(const wchar_t* operation, int error)
+{
+    wchar_t message[128];
+    _snwprintf(message, sizeof(message) / sizeof(message[0]),
+               L"%s failed (Winsock error %d)", operation, error);
+    message[(sizeof(message) / sizeof(message[0])) - 1] = L'\0';
+    return message;
+}
+
+bool SendAll(SOCKET socketHandle, const std::string& data, std::wstring* error)
+{
+    size_t offset = 0;
+    while (offset < data.size()) {
+        const int sent = send(
+            socketHandle, data.data() + offset,
+            static_cast<int>(data.size() - offset), 0);
+        if (sent == SOCKET_ERROR) {
+            *error = SocketError(L"send", WSAGetLastError());
+            return false;
+        }
+        if (sent == 0) {
+            *error = L"send returned without writing data";
+            return false;
+        }
+        offset += static_cast<size_t>(sent);
+    }
+    return true;
+}
+
+bool ConnectToServer(const std::string& host,
+                     unsigned short port,
+                     SOCKET* connectedSocket,
+                     std::wstring* error)
+{
+    unsigned long address = inet_addr(host.c_str());
+    if (address == INADDR_NONE) {
+        hostent* entry = gethostbyname(host.c_str());
+        if (entry == NULL || entry->h_addrtype != AF_INET ||
+            entry->h_length != sizeof(address)) {
+            *error = SocketError(L"name lookup", WSAGetLastError());
+            return false;
+        }
+        CopyMemory(&address, entry->h_addr_list[0], sizeof(address));
+    }
+
+    SOCKET socketHandle = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (socketHandle == INVALID_SOCKET) {
+        *error = SocketError(L"socket", WSAGetLastError());
+        return false;
+    }
+
+    u_long nonBlocking = 1;
+    ioctlsocket(socketHandle, FIONBIO, &nonBlocking);
+    sockaddr_in serverAddress;
+    ZeroMemory(&serverAddress, sizeof(serverAddress));
+    serverAddress.sin_family = AF_INET;
+    serverAddress.sin_port = htons(port);
+    serverAddress.sin_addr.s_addr = address;
+
+    int status = connect(
+        socketHandle, reinterpret_cast<sockaddr*>(&serverAddress),
+        sizeof(serverAddress));
+    if (status == SOCKET_ERROR) {
+        const int connectError = WSAGetLastError();
+        if (connectError != WSAEWOULDBLOCK &&
+            connectError != WSAEINPROGRESS) {
+            *error = SocketError(L"connect", connectError);
+            closesocket(socketHandle);
+            return false;
+        }
+
+        fd_set writeSet;
+        fd_set errorSet;
+        writeSet.fd_count = 1;
+        writeSet.fd_array[0] = socketHandle;
+        errorSet.fd_count = 1;
+        errorSet.fd_array[0] = socketHandle;
+        timeval timeout;
+        timeout.tv_sec = kNetworkTimeoutMs / 1000;
+        timeout.tv_usec = (kNetworkTimeoutMs % 1000) * 1000;
+        status = select(0, NULL, &writeSet, &errorSet, &timeout);
+        if (status <= 0) {
+            *error = status == 0 ? L"connect timed out" :
+                SocketError(L"select", WSAGetLastError());
+            closesocket(socketHandle);
+            return false;
+        }
+
+        int socketError = 0;
+        int errorLength = sizeof(socketError);
+        if (getsockopt(socketHandle, SOL_SOCKET, SO_ERROR,
+                       reinterpret_cast<char*>(&socketError),
+                       &errorLength) == SOCKET_ERROR || socketError != 0) {
+            if (socketError == 0) {
+                socketError = WSAGetLastError();
+            }
+            *error = SocketError(L"connect", socketError);
+            closesocket(socketHandle);
+            return false;
+        }
+    }
+
+    nonBlocking = 0;
+    ioctlsocket(socketHandle, FIONBIO, &nonBlocking);
+    const int timeout = kNetworkTimeoutMs;
+    setsockopt(socketHandle, SOL_SOCKET, SO_SNDTIMEO,
+               reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+    setsockopt(socketHandle, SOL_SOCKET, SO_RCVTIMEO,
+               reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+    *connectedSocket = socketHandle;
+    return true;
+}
+
+bool ExchangeWithServer(const std::wstring& query,
+                        std::wstring* responseText,
+                        std::wstring* error)
+{
+    WSADATA winsockData;
+    const int startupStatus = WSAStartup(MAKEWORD(2, 2), &winsockData);
+    if (startupStatus != 0) {
+        *error = SocketError(L"WSAStartup", startupStatus);
+        return false;
+    }
+
+    SOCKET socketHandle = INVALID_SOCKET;
+    bool succeeded = ConnectToServer(
+        kDefaultServerHost, kDefaultServerPort, &socketHandle, error);
+    if (succeeded) {
+        const std::string body =
+            std::string("{\"text\":\"") +
+            EscapeJsonString(WideToUtf8(query)) + "\"}";
+        char header[512];
+        _snprintf(header, sizeof(header),
+                  "POST /message HTTP/1.1\r\n"
+                  "Host: %s:%u\r\n"
+                  "Content-Type: application/json; charset=utf-8\r\n"
+                  "Content-Length: %u\r\n"
+                  "Connection: close\r\n\r\n",
+                  kDefaultServerHost,
+                  static_cast<unsigned int>(kDefaultServerPort),
+                  static_cast<unsigned int>(body.size()));
+        header[sizeof(header) - 1] = '\0';
+        succeeded = SendAll(socketHandle, std::string(header) + body, error);
+    }
+
+    std::string response;
+    while (succeeded) {
+        char buffer[4096];
+        const int received = recv(socketHandle, buffer, sizeof(buffer), 0);
+        if (received == 0) {
+            break;
+        }
+        if (received == SOCKET_ERROR) {
+            *error = SocketError(L"receive", WSAGetLastError());
+            succeeded = false;
+            break;
+        }
+        response.append(buffer, static_cast<size_t>(received));
+        if (response.size() > kMaximumResponseBytes) {
+            *error = L"server response exceeded 64 KiB";
+            succeeded = false;
+            break;
+        }
+    }
+
+    if (socketHandle != INVALID_SOCKET) {
+        closesocket(socketHandle);
+    }
+    WSACleanup();
+
+    if (!succeeded) {
+        return false;
+    }
+    const size_t bodyOffset = response.find("\r\n\r\n");
+    if (bodyOffset == std::string::npos) {
+        *error = L"server returned an invalid HTTP response";
+        return false;
+    }
+    int statusCode = 0;
+    if (sscanf(response.c_str(), "HTTP/%*u.%*u %d", &statusCode) != 1 ||
+        statusCode != 200) {
+        wchar_t statusMessage[96];
+        _snwprintf(statusMessage,
+                   sizeof(statusMessage) / sizeof(statusMessage[0]),
+                   L"server returned HTTP status %d", statusCode);
+        statusMessage[(sizeof(statusMessage) /
+                       sizeof(statusMessage[0])) - 1] = L'\0';
+        *error = statusMessage;
+        return false;
+    }
+    if (!ExtractJsonText(response.substr(bodyOffset + 4), responseText)) {
+        *error = L"server response did not contain valid text";
+        return false;
+    }
+    return true;
+}
+
 bool IsClass(HWND window, const wchar_t* expected)
 {
     wchar_t className[128];
@@ -277,14 +674,17 @@ public:
     ClippyAddIn()
         : referenceCount_(1), application_(NULL), timer_(0), shell_(NULL),
           content_(NULL), editor_(NULL), oldContentProc_(NULL),
-          oldEditorProc_(NULL), echoPending_(false), echoDueTick_(0)
+          oldEditorProc_(NULL), networkPending_(false),
+          responseReady_(false), responseSucceeded_(false)
     {
+        InitializeCriticalSection(&networkLock_);
         InterlockedIncrement(&g_objectCount);
     }
 
     virtual ~ClippyAddIn()
     {
         Stop();
+        DeleteCriticalSection(&networkLock_);
         InterlockedDecrement(&g_objectCount);
     }
 
@@ -458,19 +858,39 @@ private:
             application_->Release();
             application_ = NULL;
         }
-        echoPending_ = false;
-        pendingQuery_.clear();
+        EnterCriticalSection(&networkLock_);
+        responseReady_ = false;
+        responseText_.clear();
+        responseError_.clear();
+        LeaveCriticalSection(&networkLock_);
     }
 
     void Poll()
     {
-        if (echoPending_) {
-            const DWORD now = GetTickCount();
-            if (static_cast<LONG>(now - echoDueTick_) >= 0) {
-                echoPending_ = false;
-                const std::wstring query = pendingQuery_;
-                pendingQuery_.clear();
-                ShowEcho(query);
+        bool responseReady = false;
+        bool responseSucceeded = false;
+        std::wstring responseText;
+        std::wstring responseError;
+        EnterCriticalSection(&networkLock_);
+        if (responseReady_) {
+            responseReady = true;
+            responseSucceeded = responseSucceeded_;
+            responseText = responseText_;
+            responseError = responseError_;
+            responseReady_ = false;
+            networkPending_ = false;
+            responseText_.clear();
+            responseError_.clear();
+        }
+        LeaveCriticalSection(&networkLock_);
+        if (responseReady) {
+            if (responseSucceeded) {
+                AppendLog(L"RESPONSE text=" + responseText);
+                ShowResponse(L"Clippy host replied:", responseText);
+            } else {
+                AppendLog(L"ERROR host request failed: " + responseError);
+                ShowResponse(L"Clippy couldn't reach the host:",
+                             responseError);
             }
             return;
         }
@@ -538,8 +958,11 @@ private:
 
     bool CaptureQuery(const wchar_t* source)
     {
-        if (echoPending_ || editor_ == NULL) {
-            return echoPending_;
+        EnterCriticalSection(&networkLock_);
+        const bool alreadyPending = networkPending_;
+        LeaveCriticalSection(&networkLock_);
+        if (alreadyPending || editor_ == NULL) {
+            return alreadyPending;
         }
         const std::wstring query = Trim(GetWindowTextString(editor_));
         if (query.empty() || query == kPlaceholder) {
@@ -547,18 +970,68 @@ private:
         }
 
         AppendLog(std::wstring(L"QUERY source=") + source + L" text=" + query);
-        pendingQuery_ = query;
-        echoPending_ = true;
-        echoDueTick_ = GetTickCount() + kEchoDelayMs;
+        EnterCriticalSection(&networkLock_);
+        networkPending_ = true;
+        responseReady_ = false;
+        LeaveCriticalSection(&networkLock_);
 
-        // This is both immediate feedback and the fallback if the Office
-        // Assistant refuses to replace its own built-in search balloon.
-        const std::wstring feedback = L"You said: " + query;
-        SetWindowTextW(editor_, feedback.c_str());
+        NetworkJob* job = new NetworkJob();
+        job->owner = this;
+        job->query = query;
+        AddRef();
+        HANDLE thread = CreateThread(
+            NULL, 0, NetworkThreadProc, job, 0, NULL);
+        if (thread == NULL) {
+            const DWORD error = GetLastError();
+            delete job;
+            Release();
+            EnterCriticalSection(&networkLock_);
+            networkPending_ = false;
+            LeaveCriticalSection(&networkLock_);
+            wchar_t message[128];
+            _snwprintf(message, sizeof(message) / sizeof(message[0]),
+                       L"ERROR CreateThread failed error=%lu",
+                       static_cast<unsigned long>(error));
+            message[(sizeof(message) / sizeof(message[0])) - 1] = L'\0';
+            AppendLog(message);
+            SetWindowTextW(editor_, L"Could not start the host request.");
+            return true;
+        }
+        CloseHandle(thread);
+
+        SetWindowTextW(editor_, L"Asking the Clippy host...");
         return true;
     }
 
-    void ShowEcho(const std::wstring& query)
+    static DWORD WINAPI NetworkThreadProc(LPVOID parameter)
+    {
+        NetworkJob* job = reinterpret_cast<NetworkJob*>(parameter);
+        std::wstring responseText;
+        std::wstring error;
+        const bool succeeded = ExchangeWithServer(
+            job->query, &responseText, &error);
+        job->owner->CompleteNetworkRequest(
+            succeeded, responseText, error);
+        ClippyAddIn* owner = job->owner;
+        delete job;
+        owner->Release();
+        return 0;
+    }
+
+    void CompleteNetworkRequest(bool succeeded,
+                                const std::wstring& responseText,
+                                const std::wstring& error)
+    {
+        EnterCriticalSection(&networkLock_);
+        responseSucceeded_ = succeeded;
+        responseText_ = responseText;
+        responseError_ = error;
+        responseReady_ = true;
+        LeaveCriticalSection(&networkLock_);
+    }
+
+    void ShowResponse(const std::wstring& heading,
+                      const std::wstring& text)
     {
         HWND previousShell = shell_;
         DetachHooks();
@@ -590,9 +1063,9 @@ private:
         }
 
         if (SUCCEEDED(hr) && balloon != NULL) {
-            hr = PutString(balloon, L"Heading", L"Clippy heard:");
+            hr = PutString(balloon, L"Heading", heading);
             if (SUCCEEDED(hr)) {
-                hr = PutString(balloon, L"Text", query);
+                hr = PutString(balloon, L"Text", text);
             }
             if (SUCCEEDED(hr)) {
                 hr = PutLong(balloon, L"Button", 1);  // msoButtonSetOK
@@ -611,7 +1084,7 @@ private:
         }
 
         if (SUCCEEDED(hr)) {
-            AppendLog(L"ECHO shown with Assistant.NewBalloon");
+            AppendLog(L"RESPONSE shown with Assistant.NewBalloon");
         } else {
             wchar_t error[64];
             _snwprintf(error, sizeof(error) / sizeof(error[0]),
@@ -633,9 +1106,16 @@ private:
     HWND editor_;
     WNDPROC oldContentProc_;
     WNDPROC oldEditorProc_;
-    bool echoPending_;
-    DWORD echoDueTick_;
-    std::wstring pendingQuery_;
+    struct NetworkJob {
+        ClippyAddIn* owner;
+        std::wstring query;
+    };
+    CRITICAL_SECTION networkLock_;
+    bool networkPending_;
+    bool responseReady_;
+    bool responseSucceeded_;
+    std::wstring responseText_;
+    std::wstring responseError_;
 };
 
 class ClippyClassFactory : public IClassFactory
