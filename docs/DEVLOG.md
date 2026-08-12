@@ -340,3 +340,66 @@ build.bat'` rebuilt all three XP binaries without warnings. The independent
 `test_host_bridge.vbs` diagnostic then returned HTTP 200 and
 `{"text":"hello from Windows XP"}` from the running host server. No generated
 binaries, server output, or runtime logs are part of this documentation change.
+
+## 2026-08-11 - OpenAI-powered Clippy replies
+
+Replaced the host echo handler with a single-turn OpenAI Responses API call
+through the official JavaScript SDK. The default model is `gpt-5.6-luna`, with
+an environment override through `CLIPPY_OPENAI_MODEL`; startup now fails before
+binding when `OPENAI_API_KEY` is absent. Requests use low reasoning effort,
+low verbosity, a 512-token output ceiling, no tools or prior response, and
+`store: false`. Code-managed instructions constrain replies to concise,
+plain-text, lightly playful Clippy answers suitable for an Office balloon.
+
+The HTTP success contract remains `200 {"text":"..."}`. The reply generator is
+injectable for network-free tests. Bad input returns 400, OpenAI timeouts return
+504, and other upstream or empty-output failures return 502 with safe error
+text. The XP shim now keeps three-second connect/send limits but allows a
+60-second receive, parses JSON `error` strings on non-200 responses, and shows
+them under `Clippy couldn't answer:`. The XP VBScript diagnostic uses the same
+60-second receive allowance. Repository `.env` files are ignored so API keys
+cannot be added accidentally.
+
+Host validation:
+
+```text
+cd server && npm test
+=> 7 tests passed; 0 failed
+
+env -u OPENAI_API_KEY npm start
+=> exit 1: OPENAI_API_KEY must be set before starting the Clippy host server
+
+curl --fail-with-body -H 'Content-Type: application/json' \
+  --data '{"text":"In one short sentence, why was the original Clippy infamous?"}' \
+  http://127.0.0.1:3210/message
+=> {"text":"Clippy was infamous for interrupting users with unsolicited, often unhelpful advice."}
+```
+
+A controlled invalid credential exercised the real SDK error path: host curl
+returned HTTP 502 with `{"error":"OpenAI request failed"}`, and the XP
+diagnostic received the same response. A deterministic injected generator then
+returned HTTP 200 through the XP diagnostic, proving that tests and acceptance
+do not depend on a live model for protocol coverage.
+
+Mirrored `src/addin/ClippyShim.cpp` and the updated diagnostic to XP. The full
+`C:\clippy\build.bat` VS2010 x86 build produced all three binaries without
+warnings, and silent per-user registration preserved `LoadBehavior=3`. With a
+live API key, `cscript.exe //nologo %TEMP%\test_host_bridge.vbs` returned:
+
+```text
+HTTP 200
+{"text":"Hello! It's great to hear from Windows XP. How can I help you today?"}
+```
+
+The visible UTM acceptance used Windows Key+R to launch Word, F1 to open the
+authentic Assistant question editor, and unmodified Enter to submit `In five
+words, what is retro computing?`. The live `gpt-5.6-luna` reply appeared in a
+fresh native balloon under `Clippy host replied:` as `Old computers, software,
+and games nostalgia.` The XP log correlated `QUERY` and `RESPONSE`; a separate
+controlled failure visibly produced `Clippy couldn't answer: OpenAI request
+failed`. UTM's Capture Input control was not used.
+
+Known limitations: replies are single-turn and text-only; there is no memory,
+tool execution, animation/action data, streaming, or configurable XP endpoint.
+The 150-word instruction is a model constraint rather than a server-side word
+truncation, while the 512-token API ceiling remains the hard output bound.

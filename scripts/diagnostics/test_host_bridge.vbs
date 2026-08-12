@@ -4,7 +4,7 @@ Const Endpoint = "http://10.0.2.2:3210/message"
 
 Dim request
 Set request = CreateObject("MSXML2.ServerXMLHTTP.3.0")
-request.setTimeouts 3000, 3000, 3000, 3000
+request.setTimeouts 3000, 3000, 3000, 60000
 request.open "POST", Endpoint, False
 request.setRequestHeader "Content-Type", "application/json; charset=utf-8"
 request.send "{""text"":""hello from Windows XP""}"

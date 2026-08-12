@@ -21,20 +21,21 @@ XP should contain as little modern infrastructure as possible. It acts primarily
 
 Current Status — 2026-08-11
 
-The first four milestones are complete as an end-to-end echo path:
+The first four milestones and the first AI response checkpoint are complete:
 
 * native code can control the installed Clippit character
 * the authentic Office Assistant query editor and Search command are identified
 * `ClippyShim.dll` intercepts Search and unmodified Enter inside Word
 * XP posts the captured text to the macOS TypeScript server
-* the server logs and echoes the text
-* Word renders the returned text in a native Assistant balloon
+* the server sends the text to OpenAI's Responses API with `gpt-5.6-luna`
+* Word renders the model-generated text in a native Assistant balloon
 
-The complete flow has been visibly verified on the XP desktop and independently
-verified at both HTTP boundaries. The project is now ready to replace the echo
-handler with the modern agent. Milestones 5 and 6 remain open. The immediate
-technical follow-ups are to make the XP endpoint configurable and extend the
-response contract beyond `text` to optional animation and action data.
+The complete live model flow has been visibly verified on the XP desktop and
+independently verified at both HTTP boundaries. This checkpoint is deliberately
+single-turn and text-only. Milestones 5 and 6 remain open: the next work is to
+add controlled host tools, then conversation/session state and richer Clippy
+animation/action responses. Making the XP endpoint configurable also remains a
+protocol follow-up.
 
 ┌──────────────────────────── macOS ────────────────────────────┐
 │                                                              │
@@ -260,44 +261,53 @@ preserved in `docs/screenshots/clippy-query.png` and
 `docs/screenshots/clippy-echo.png`; the current host-bridge acceptance evidence
 is described under milestone 4.
 
-4. Bridge Clippy to macOS — echo path implemented
+4. Bridge Clippy to macOS — AI text path implemented
 
 The captured query now crosses the VM boundary as an HTTP request:
 
 XP → Mac
 {"text":"why is my build failing?"}
 
-and receive:
+and receives a model-generated reply:
 
 Mac → XP
 {
-  "text": "why is my build failing?"
+  "text": "Your linker cannot find the library named in the build settings."
 }
 
 `ClippyShim.dll` starts a short-lived background worker for each accepted
 query, UTF-8 encodes it, and posts it to
 `http://10.0.2.2:3210/message`. `10.0.2.2` is the host gateway exposed to this
-XP guest by its current QEMU/UTM network. Connect, send, and receive operations
-use three-second timeouts, and responses are limited to 64 KiB. The worker
-never calls Word COM; it places the response into synchronized state, and the
-existing Word UI-thread timer displays it through `Assistant.NewBalloon`.
-This preserves the apartment boundary and avoids freezing Word during network
-I/O.
+XP guest by its current QEMU/UTM network. Connect and send operations retain
+three-second timeouts; receive operations allow 60 seconds for model
+generation. Responses remain limited to 64 KiB. The worker never calls Word
+COM; it places the response into synchronized state, and the existing Word
+UI-thread timer displays it through `Assistant.NewBalloon`. This preserves the
+apartment boundary and avoids freezing Word during network I/O.
 
 The macOS side lives under `server/` and is a strict TypeScript Node HTTP
 server. It binds `0.0.0.0:3210`, accepts only `POST /message`, validates a
-non-empty string `text` property, logs the message, and currently echoes
-`{"text":"..."}`. Its bind address and port can be changed with
-`CLIPPY_SERVER_BIND` and `CLIPPY_SERVER_PORT`; the XP endpoint remains fixed
-for this milestone.
+non-empty string `text` property, and sends it to OpenAI's Responses API. The
+official JavaScript SDK reads `OPENAI_API_KEY`; `CLIPPY_OPENAI_MODEL` selects
+the model and defaults to `gpt-5.6-luna`. Requests use low reasoning effort,
+low text verbosity, a 512-token output ceiling, no tools, no previous response,
+and no response storage. Code-managed instructions keep replies plain-text,
+short, accurate, and lightly in character for the Office balloon. Its bind
+address and port remain configurable with `CLIPPY_SERVER_BIND` and
+`CLIPPY_SERVER_PORT`; the XP endpoint remains fixed.
 
-Successful responses and transport failures both return to the UI thread and
-are rendered in native Office Assistant balloons. The response parser handles
-UTF-8 and JSON string escapes. Animation commands are not yet consumed; adding
-the optional `animation` response field remains part of the next host-agent
-integration step. The complete visible query/response path is preserved in
-`docs/screenshots/clippy-bridge-query.png` and
-`docs/screenshots/clippy-bridge-response.png`.
+Successful responses and failures both return to the UI thread and are
+rendered in native Office Assistant balloons. Malformed XP requests return
+HTTP 400, model timeouts return 504, and other model failures return 502. The
+shim parses safe JSON error text and presents it under `Clippy couldn't
+answer:`. The response parser handles UTF-8 and JSON string escapes.
+
+The server is stateless and text-only at this checkpoint. Conversation memory,
+tools, optional animation data, and action buttons remain milestone 5/6 work.
+The original echo-path screenshots remain under `docs/screenshots/`; the live
+AI path was freshly verified on the visible UTM desktop with the query `In five
+words, what is retro computing?` and the native response `Old computers,
+software, and games nostalgia.`
 
 5. Give Clippy tools
 

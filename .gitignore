@@ -5,6 +5,9 @@
 build/
 server/dist/
 server/node_modules/
+*.env
+.env.*
+!.env.example
 Debug/
 Release/
 Win32/

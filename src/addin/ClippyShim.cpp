@@ -47,7 +47,9 @@ const wchar_t kLogPath[] = L"C:\\clippy\\ClippyShim.log";
 const UINT_PTR kPollIntervalMs = 200;
 const char kDefaultServerHost[] = "10.0.2.2";
 const unsigned short kDefaultServerPort = 3210;
-const int kNetworkTimeoutMs = 3000;
+const int kConnectTimeoutMs = 3000;
+const int kSendTimeoutMs = 3000;
+const int kReceiveTimeoutMs = 60000;
 const size_t kMaximumResponseBytes = 64 * 1024;
 
 HINSTANCE g_module = NULL;
@@ -353,13 +355,17 @@ bool ParseHexCodeUnit(const std::string& text,
     return true;
 }
 
-bool ExtractJsonText(const std::string& json, std::wstring* result)
+bool ExtractJsonStringProperty(const std::string& json,
+                               const char* propertyName,
+                               std::wstring* result)
 {
-    const size_t property = json.find("\"text\"");
+    const std::string quotedProperty =
+        std::string("\"") + propertyName + "\"";
+    const size_t property = json.find(quotedProperty);
     if (property == std::string::npos) {
         return false;
     }
-    size_t position = json.find(':', property + 6);
+    size_t position = json.find(':', property + quotedProperty.size());
     if (position == std::string::npos) {
         return false;
     }
@@ -504,8 +510,8 @@ bool ConnectToServer(const std::string& host,
         errorSet.fd_count = 1;
         errorSet.fd_array[0] = socketHandle;
         timeval timeout;
-        timeout.tv_sec = kNetworkTimeoutMs / 1000;
-        timeout.tv_usec = (kNetworkTimeoutMs % 1000) * 1000;
+        timeout.tv_sec = kConnectTimeoutMs / 1000;
+        timeout.tv_usec = (kConnectTimeoutMs % 1000) * 1000;
         status = select(0, NULL, &writeSet, &errorSet, &timeout);
         if (status <= 0) {
             *error = status == 0 ? L"connect timed out" :
@@ -530,11 +536,14 @@ bool ConnectToServer(const std::string& host,
 
     nonBlocking = 0;
     ioctlsocket(socketHandle, FIONBIO, &nonBlocking);
-    const int timeout = kNetworkTimeoutMs;
+    const int sendTimeout = kSendTimeoutMs;
+    const int receiveTimeout = kReceiveTimeoutMs;
     setsockopt(socketHandle, SOL_SOCKET, SO_SNDTIMEO,
-               reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+               reinterpret_cast<const char*>(&sendTimeout),
+               sizeof(sendTimeout));
     setsockopt(socketHandle, SOL_SOCKET, SO_RCVTIMEO,
-               reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+               reinterpret_cast<const char*>(&receiveTimeout),
+               sizeof(receiveTimeout));
     *connectedSocket = socketHandle;
     return true;
 }
@@ -605,8 +614,15 @@ bool ExchangeWithServer(const std::wstring& query,
         return false;
     }
     int statusCode = 0;
-    if (sscanf(response.c_str(), "HTTP/%*u.%*u %d", &statusCode) != 1 ||
-        statusCode != 200) {
+    if (sscanf(response.c_str(), "HTTP/%*u.%*u %d", &statusCode) != 1) {
+        *error = L"server returned an invalid HTTP status";
+        return false;
+    }
+    const std::string responseBody = response.substr(bodyOffset + 4);
+    if (statusCode != 200) {
+        if (ExtractJsonStringProperty(responseBody, "error", error)) {
+            return false;
+        }
         wchar_t statusMessage[96];
         _snwprintf(statusMessage,
                    sizeof(statusMessage) / sizeof(statusMessage[0]),
@@ -616,7 +632,7 @@ bool ExchangeWithServer(const std::wstring& query,
         *error = statusMessage;
         return false;
     }
-    if (!ExtractJsonText(response.substr(bodyOffset + 4), responseText)) {
+    if (!ExtractJsonStringProperty(responseBody, "text", responseText)) {
         *error = L"server response did not contain valid text";
         return false;
     }
@@ -889,7 +905,7 @@ private:
                 ShowResponse(L"Clippy host replied:", responseText);
             } else {
                 AppendLog(L"ERROR host request failed: " + responseError);
-                ShowResponse(L"Clippy couldn't reach the host:",
+                ShowResponse(L"Clippy couldn't answer:",
                              responseError);
             }
             return;

@@ -49,18 +49,26 @@ regsvr32 /s C:\clippy\build\ClippyShim.dll
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the system design and
 [docs/DEVLOG.md](docs/DEVLOG.md) for verified implementation details.
 
-## Run the host echo server
+## Run the OpenAI-backed host server
 
-On macOS, start the TypeScript bridge before submitting a Clippy question:
+The host requires Node.js 22 or newer and an OpenAI API key. Keep the key in
+the host environment rather than in the repository. The model defaults to
+`gpt-5.6-luna`; set `CLIPPY_OPENAI_MODEL` to override it.
 
 ```sh
 cd server
 npm install
+npm test
 npm run build
+export OPENAI_API_KEY="your_api_key_here"
 npm start
 ```
 
 The server listens on `0.0.0.0:3210` and accepts `POST /message` with a JSON
-body such as `{"text":"hello"}`. The current milestone prints the message and
-returns the same text. The XP shim reaches it through QEMU/UTM's host gateway
-at `10.0.2.2:3210`.
+body such as `{"text":"hello"}`. It sends each question to the OpenAI Responses
+API as an independent turn and returns the generated plain-text reply in the
+same `{"text":"..."}` response shape. The XP shim reaches it through
+QEMU/UTM's host gateway at `10.0.2.2:3210`.
+
+See the [OpenAI API quickstart](https://developers.openai.com/api/docs/quickstart)
+for API-key setup.
