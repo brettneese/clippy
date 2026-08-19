@@ -14,6 +14,52 @@
 
 ## Current build and run workflow
 
+### Desktop-wide Microsoft Agent controller
+
+- The primary global Clippy host is `xp/clippy_agent.py`, a Python
+  3.4-compatible persistent `Agent.Control.2` client. It is independent of
+  Word and always loads
+  `C:\Program Files\Microsoft Office\Office10\CLIPPIT.ACS`.
+- XP uses 32-bit Python 3.4.4 with the official archived 32-bit pywin32 build
+  220 installer. See `xp/README.md` for the source and checksum. Do not replace
+  that pin with current pywin32 or comtypes packages; current releases do not
+  support Python 3.4, and comtypes 1.2.1 hung at the Agent `Connected` property
+  on this VM.
+- Mirror the controller and diagnostics to the existing `C:\clippy` tree:
+
+  ```sh
+  scp xp/__init__.py xp/clippy_agent.py xp/test_clippy_agent.py \
+    windows-xp:'C:/clippy/xp/'
+  scp scripts/diagnostics/smoke_clippy_controller.py \
+    scripts/diagnostics/clippy_controller_probe.jsonl \
+    windows-xp:'C:/clippy/scripts/diagnostics/'
+  ```
+
+- The fake-COM unit suite is safe to run over SSH with XP's actual interpreter:
+
+  ```sh
+  ssh windows-xp \
+    'cd /d C:\clippy && python -m unittest -v xp.test_clippy_agent'
+  ```
+
+- Launch the real controller only from XP's visible desktop. Use Windows
+  Key->R to open `cmd.exe`, then run from `C:\clippy`:
+
+  ```bat
+  python -u scripts\diagnostics\smoke_clippy_controller.py
+  python -u xp\clippy_agent.py
+  ```
+
+  An Agent client launched through SSH can attach to a non-visible desktop or
+  hang while setting `Connected = True`. Validate show/move/animation/balloon
+  behavior with fresh UTM screenshots. Do not use UTM Capture Input.
+- The stdin protocol is a narrow one-request-per-line JSON-RPC foundation, not
+  yet MCP. It exposes only the documented Clippy actions and rejects animation
+  names not enumerated from the installed character. Do not add arbitrary
+  shell, input injection, generic COM, or broad desktop-control methods.
+
+### Word COM add-in and macOS model server
+
 - The macOS host server is a TypeScript project under `server/`. Install its development dependencies and compile it from the repository root with:
 
   ```sh

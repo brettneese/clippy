@@ -19,9 +19,10 @@ Keep the two eras separate:
 
 XP should contain as little modern infrastructure as possible. It acts primarily as Clippy’s body and compatibility environment.
 
-Current Status — 2026-08-11
+Current Status — 2026-08-19
 
-The first four milestones and the first AI response checkpoint are complete:
+The original Word integration's first four milestones and first AI response
+checkpoint remain complete:
 
 * native code can control the installed Clippit character
 * the authentic Office Assistant query editor and Search command are identified
@@ -32,13 +33,21 @@ The first four milestones and the first AI response checkpoint are complete:
 * Word renders model-generated Markdown-lite with native Assistant balloon
   colors, underlining, and list labels
 
-The complete live model flow has been visibly verified on the XP desktop and
-independently verified at both HTTP boundaries. This checkpoint remains
-single-turn, but reply text can now carry a small, safe Markdown presentation
-subset. Milestones 5 and 6 remain open: the next work is to add controlled host
-tools, then conversation/session state and structured Clippy animation/action
-responses. Making the XP endpoint configurable also remains a protocol
-follow-up.
+The first foundation for a desktop-wide host is also complete. A Python
+3.4-compatible process on XP now owns the real Microsoft Agent character
+independently of Word and exposes a fixed JSON-RPC command surface for show,
+hide, move, speak, think, installed-animation enumeration, and guarded play.
+The process keeps one `Agent.Control.2` connection and one loaded
+`CLIPPIT.ACS` character for the full stdin session. This is a transport and COM
+foundation, not yet an MCP server.
+
+Microsoft Agent is now the primary desktop-wide Clippy host. The Word COM
+add-in remains a working, Office-specific input and rich-balloon integration;
+it is not the component boundary for global Clippy control. The next global
+protocol decision is whether to implement the minimal MCP adapter directly in
+the Python process or keep JSON-RPC as an internal child-process boundary. MCP
+tool names, lifecycle negotiation, and Agent request-completion reporting
+remain open.
 
 ┌──────────────────────────── macOS ────────────────────────────┐
 │                                                              │
@@ -57,20 +66,18 @@ follow-up.
                   ▼
 ┌──────────────────── Windows XP SP3 x86 ──────────────────────┐
 │                                                              │
-│  Office XP                                                   │
+│  Microsoft Agent (primary desktop-wide character host)       │
 │      │                                                       │
-│      ▼                                                       │
-│  Original Office Assistant UI                                │
-│      │                                                       │
-│      ▼                                                       │
-│     📎 Clippy                                                │
-│      │                                                       │
-│      ├── ClippyShim.dll                                      │
-│      │      ├── capture user input                           │
-│      │      ├── send requests to Mac                         │
-│      │      └── render responses/actions                     │
-│      │                                                       │
-│      └── Microsoft Agent / Office Assistant APIs             │
+│      └── xp/clippy_agent.py                                  │
+│             ├── persistent Agent.Control.2 client            │
+│             ├── installed-animation guard                    │
+│             └── narrow stdin JSON-RPC actions                │
+│                                                              │
+│  Office XP (working Office-specific path)                     │
+│      └── ClippyShim.dll                                      │
+│             ├── capture Word Assistant input                 │
+│             ├── send requests to Mac                         │
+│             └── render native rich Assistant balloons        │
 │                                                              │
 │  Development / control infrastructure                        │
 │  ├── Visual Studio / native C++ toolchain                    │
@@ -93,12 +100,56 @@ The authentic Microsoft stack remains responsible for:
 * selectable questions/buttons
 * the original “What would you like to do?” interface
 
-Microsoft Agent itself supplies the animated character, while Office adds richer interactive UI on top.
+Microsoft Agent itself supplies the animated character globally, while Office
+adds richer interactive UI within Office applications. New desktop-wide work
+must use Microsoft Agent as its primary character boundary and must not require
+Word to be running. The Office Assistant path remains available when an
+Office-native question editor or rich Office balloon is specifically needed.
+
+Python Clippy controller
+
+`xp/clippy_agent.py` is the Phase 1/2 global-host foundation. It runs under the
+installed 32-bit Python 3.4.4 and uses pywin32 build 220 to drive the real
+`Agent.Control.2` COM object. It always loads:
+
+```text
+C:\Program Files\Microsoft Office\Office10\CLIPPIT.ACS
+```
+
+The controller owns that COM object and character until stdin closes or
+`clippy.shutdown` is received. Its JSON-RPC 2.0 methods are limited to:
+
+```text
+clippy.animations
+clippy.show
+clippy.hide
+clippy.move
+clippy.speak
+clippy.think
+clippy.play
+clippy.shutdown
+```
+
+`clippy.play` accepts an animation only when the exact name was enumerated
+from the loaded character during that process. Text and coordinates are
+validated, extra parameters are rejected, and the adapter contains no shell,
+filesystem, window-input, or generic COM invocation feature. Microsoft Agent
+actions are asynchronous; a `{"queued":true}` result means the COM call
+returned without a synchronous error, not that the animation request later
+completed successfully.
+
+The XP dependency is intentionally pinned to the period-compatible 32-bit
+pywin32 build 220 installer. `comtypes` 1.2.1 imports on Python 3.4 and can
+create `Agent.Control.2`, but both dynamic and generated dispatch hung when
+setting `Connected = True` in this environment. The validated controller uses
+pywin32 and must be launched from XP's visible desktop; an SSH-launched Agent
+client can attach to a non-visible desktop or hang during connection.
 
 ClippyShim.dll
 
-A native Win32/x86 component loaded into Office is the primary XP integration
-layer.
+A native Win32/x86 component loaded into Office is the Office-specific XP
+integration layer. It is no longer the primary boundary for desktop-wide
+Clippy control.
 
 Responsibilities:
 
@@ -170,6 +221,22 @@ No modern coding-agent runtime needs to run on XP itself.
 ⸻
 
 Major Milestones
+
+Global Microsoft Agent host track — Phase 1/2 foundation complete
+
+The desktop-wide track now has a persistent Python controller and a narrow,
+tested newline JSON-RPC adapter. The real XP acceptance covered runtime
+animation enumeration, show, hide, move, Greeting play, think, speak, rejection
+of a fabricated animation, and clean shutdown. Visible evidence is preserved
+in `docs/screenshots/clippy-global-controller.jpg`.
+
+This phase deliberately stops before MCP negotiation or desktop tools. The
+next milestone is a minimal MCP server exposing only the fixed Clippy actions,
+plus a decision on whether the MCP framing lives directly in Python or wraps
+the JSON-RPC child process. Agent request completion/error observation should
+be designed before actions are represented as completed rather than queued.
+
+Historical Word integration track
 
 1. Native Clippy control
 

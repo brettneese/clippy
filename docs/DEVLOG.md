@@ -547,3 +547,91 @@ Known limitations: replies are single-turn and text-only; there is no memory,
 tool execution, animation/action data, streaming, or configurable XP endpoint.
 The 150-word instruction is a model constraint rather than a server-side word
 truncation, while the 512-token API ceiling remains the hard output bound.
+
+## 2026-08-19 - persistent desktop-wide Microsoft Agent controller foundation
+
+Added `xp/clippy_agent.py`, a Python 3.4-compatible controller that holds one
+real `Agent.Control.2` connection and the installed Office XP Clippit character
+for the lifetime of a stdin session. This is the new primary desktop-wide
+character boundary; the existing `ClippyShim.dll` remains the working
+Word-specific integration. The controller supports show, hide, move, speak,
+think, animation enumeration, and guarded play. Play accepts only exact names
+enumerated from `C:\Program Files\Microsoft Office\Office10\CLIPPIT.ACS` at
+startup.
+
+Added a narrow newline JSON-RPC 2.0 adapter with no arbitrary shell,
+filesystem, input injection, generic COM, or broad desktop-control method.
+Requests reject extra parameters, bound text and coordinate inputs, return
+standard parse/request/method/parameter errors, and keep internal COM error
+details on stderr. Agent actions return `queued` rather than claiming
+completion because Microsoft Agent returns asynchronous request objects whose
+final status is not yet observed. Added a reusable visible smoke script and a
+two-request redirected protocol probe.
+
+The first attempted dependency, `comtypes==1.2.1`, is the last release that
+supports Python 3.4 and imported successfully on XP. Both dynamic and generated
+dispatch created `Agent.Control.2`, but setting `Connected = True` hung. The
+validated path uses the official archived 32-bit pywin32 build 220 installer
+for Python 3.4. The legacy installer had to be completed on the visible XP
+desktop; it did not honor quiet mode over SSH. Agent clients launched through
+SSH also hung during `Connected`, so GUI character hosts must follow the normal
+visible-desktop launch rule. The unused comtypes experiment and both staged
+installer files were removed after pywin32 validation.
+
+Host-side deterministic validation:
+
+```text
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v xp.test_clippy_agent
+=> 7 tests passed
+
+git diff --check
+=> clean
+```
+
+The tests use a fake COM object to verify single-load persistence, the exact
+method surface, parameter validation, runtime animation guarding, JSON-RPC
+error behavior, safe teardown, and multiple requests through one stdin
+session. The same suite then passed under XP's actual Python 3.4.4 interpreter:
+
+```text
+ssh windows-xp \
+  'cd /d C:\clippy && python -m unittest -v xp.test_clippy_agent'
+=> 7 tests passed in 0.281s
+```
+
+The XP files were mirrored under `C:\clippy`, then the visible UTM desktop ran:
+
+```text
+cd /d C:\clippy
+python -u scripts\diagnostics\smoke_clippy_controller.py
+=> ANIMATIONS=<the 45 installed Clippit names>
+=> VISIBLE_SMOKE_READY
+=> VISIBLE_SMOKE_COMPLETE
+
+python -u xp\clippy_agent.py
+```
+
+One persistent interactive session successfully returned JSON-RPC results for
+`clippy.animations`, `clippy.show`, `clippy.move`, `clippy.play` with
+`Greeting`, `clippy.think`, `clippy.speak`, and `clippy.hide`. The fabricated
+animation `NotInstalled` returned `-32602` and never reached COM. Fresh visible
+evidence in `docs/screenshots/clippy-global-controller.jpg` shows the real
+Clippit character and his thought balloon, alongside the protocol responses.
+
+After removing an unnecessary blocking-reader helper found during acceptance,
+the clean-shutdown probe ran on the visible desktop:
+
+```text
+python -u xp\clippy_agent.py < \
+  scripts\diagnostics\clippy_controller_probe.jsonl
+=> id 1 returned all installed animation names
+=> id 2 returned {"closing":true}
+=> returned to the command prompt with no python.exe process left
+```
+
+Known limitations: this is not yet an MCP server; there is no `initialize` or
+MCP tool schema. Agent request completion is not surfaced after a call queues,
+and the global host still needs a defined visible-desktop launch/lifecycle
+mechanism. The next architectural decision is whether the minimal MCP framing
+runs directly in the Python process or wraps this JSON-RPC controller as a
+child process.

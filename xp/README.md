@@ -1,0 +1,50 @@
+# Windows XP Clippy controller
+
+`clippy_agent.py` is a Python 3.4-compatible, process-persistent controller for
+the real Microsoft Agent character installed with Office XP. It loads
+`C:\Program Files\Microsoft Office\Office10\CLIPPIT.ACS` through
+`Agent.Control.2`; it does not use Word's Office Assistant or screen
+automation.
+
+## XP dependency
+
+The validated XP environment uses 32-bit Python 3.4.4 and pywin32 build 220.
+That historical build is not available as a Python 3.4 wheel on current PyPI.
+Install the official 32-bit Python 3.4 package from the archived pywin32
+release:
+
+```text
+https://sourceforge.net/projects/pywin32/files/pywin32/Build%20220/
+pywin32-220.win32-py3.4.exe
+SHA-256 c86bea23fec5f353094b42ec0b48553db9152e6dfc00681df1545efd8af3c63b
+```
+
+Run the installer on XP's visible desktop. The legacy installer does not honor
+quiet mode reliably when launched through SSH.
+
+## Protocol foundation
+
+Start `python -u xp\clippy_agent.py` and write one JSON-RPC 2.0 request per
+UTF-8 line. The narrow method surface is:
+
+```text
+clippy.animations
+clippy.show
+clippy.hide
+clippy.move       {"x": 650, "y": 420}
+clippy.speak      {"text": "Hello"}
+clippy.think      {"text": "Working on it"}
+clippy.play       {"animation": "Greeting"}
+clippy.shutdown
+```
+
+Character actions are asynchronous Microsoft Agent requests. A successful
+JSON-RPC result means the request was queued without a synchronous COM error;
+Phase 1 does not yet report Agent request completion. `clippy.play` accepts
+only names enumerated from the loaded `CLIPPIT.ACS` during that process.
+Batch arrays are deliberately rejected; the foundation accepts exactly one
+request object per input line.
+
+This newline protocol is a testable transport foundation, not an MCP server.
+The next protocol phase can wrap the same `ClippyController` methods as a
+small, fixed MCP tool set without exposing shell or general desktop control.
