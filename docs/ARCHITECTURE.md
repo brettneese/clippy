@@ -230,11 +230,15 @@ animation enumeration, show, hide, move, Greeting play, think, speak, rejection
 of a fabricated animation, and clean shutdown. Visible evidence is preserved
 in `docs/screenshots/clippy-global-controller.jpg`.
 
-This phase deliberately stops before MCP negotiation or desktop tools. The
-next milestone is a minimal MCP server exposing only the fixed Clippy actions,
-plus a decision on whether the MCP framing lives directly in Python or wraps
-the JSON-RPC child process. Agent request completion/error observation should
-be designed before actions are represented as completed rather than queued.
+The follow-on MCP design is recorded in `docs/specs/mcp/README.md`. Phase 3 is
+the next implementation milestone: MCP lifecycle negotiation, newline stdio
+framing, and initial fixed Clippy tools. Phase 4 remains tightly scoped
+read-only XP automation with explicit confirmation; Phase 5 is separate
+Word-native Assistant integration with intentional visible handoff; and Phase 6
+is final XP validation and documentation synchronization. The architecture
+decision between direct MCP in Python and an MCP adapter around the current
+JSON-RPC controller remains open. Agent request completion/error observation
+must be designed before actions are represented as completed rather than queued.
 
 Historical Word integration track
 

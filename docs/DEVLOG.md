@@ -635,3 +635,41 @@ and the global host still needs a defined visible-desktop launch/lifecycle
 mechanism. The next architectural decision is whether the minimal MCP framing
 runs directly in the Python process or wraps this JSON-RPC controller as a
 child process.
+
+## 2026-08-19 - MCP design specification for the global Clippy host
+
+Added `docs/specs/mcp/README.md` as the implementation-ready follow-on to the
+completed Phase 1/2 controller. The specification records the chosen
+desktop-wide direction: real Microsoft Agent plus the installed
+`CLIPPIT.ACS` character is the primary interface; Word's Office Assistant is a
+separate, later capability.
+
+The document defines the six agreed phases. Phase 3 covers MCP lifecycle
+negotiation, UTF-8 newline stdio JSON-RPC, `tools/list`, and the fixed Clippy
+tool set. Phase 4 limits XP automation to allowlisted read-only observations
+with explicit confirmation. Phase 5 requires intentional visible handoff for
+Word-native Assistant actions. Phase 6 covers XP/UTM validation and synchronized
+documentation. It also records every verified XP constraint: Python 3.4.4,
+32-bit pywin32 build 220, visible-session launch, SSH/non-visible Agent
+behavior, the comtypes `Connected=True` hang, runtime animation guarding, and
+the prohibition on arbitrary shell or unrestricted COM.
+
+The spec leaves the required architecture decision explicit: implement MCP
+directly in the Python process or put a modern MCP adapter around the current
+line-delimited JSON-RPC controller. It pins no protocol version until Phase 3
+implementation rechecks the supported MCP version.
+
+Documentation-only validation:
+
+```text
+git diff --check
+=> clean
+
+rg -n "Phase 3|Phase 4|Phase 5|Phase 6|Open architecture decision" \
+  docs/specs/mcp/README.md docs/ARCHITECTURE.md
+=> all planned phases and the open decision present
+```
+
+No XP binaries, controller code, or runtime behavior changed in this milestone;
+the remaining work is the Phase 3 implementation decision and MCP adapter or
+direct-server build.
