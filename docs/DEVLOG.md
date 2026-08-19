@@ -706,3 +706,37 @@ malformed/pre-initialized requests, and clean EOF teardown using fake COM.
 Known limitations remain: the real Agent calls are asynchronous and report
 `queued: true` without completion/error observation, and visible XP/UTM
 acceptance still must be run from the XP desktop rather than SSH.
+
+## 2026-08-19 - Persistent Codex MCP service bridge
+
+Added the persistent service boundary needed for Codex to reach the real
+visible XP Agent process. `xp/clippy_agent.py --mcp-tcp 127.0.0.1 3211` keeps a
+loopback-only MCP listener in the interactive XP desktop. The new
+`xp/mcp_stdio_forward.py` is a line-oriented SSH bridge: Codex owns its stdio
+child, while the bridge forwards MCP bytes to the XP listener and never creates
+COM. `scripts/service/clippy_mcp_start.bat` starts the listener from Brett's
+XP Startup folder.
+
+The Codex CLI registration is now global:
+
+```text
+codex mcp add clippy -- /usr/bin/ssh -T windows-xp "python -u C:\clippy\xp\mcp_stdio_forward.py 127.0.0.1 3211"
+=> Added global MCP server 'clippy'.
+```
+
+End-to-end bridge validation used that exact SSH command and returned:
+
+```text
+initialize => protocolVersion 2025-11-25, tools capability
+tools/list => all seven clippy.* tools
+clippy.animations => 43 runtime names from CLIPPIT.ACS
+clippy.show => {"queued":true}
+clippy.hide => {"queued":true}
+```
+
+The XP listener was launched from the visible UTM desktop and verified with
+`netstat` on `127.0.0.1:3211`. Host and XP controller tests remain 11/11, both
+Python files compile under the host interpreter, and `git diff --check` is
+clean. The Codex desktop session must be restarted or opened as a new session
+before the newly registered server enters its live tool inventory. The visible
+XP Startup listener must be running before that session connects.

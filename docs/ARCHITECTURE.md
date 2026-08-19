@@ -147,6 +147,27 @@ asynchronous Agent requests. The MCP path has no prompts, resources, logging,
 sampling, shell, input injection, generic COM, or broad desktop-control
 capability. EOF hides and unloads Clippy.
 
+Persistent Codex service boundary
+
+Codex runs on macOS, while the real Agent COM client must remain in the visible
+XP desktop. The persistent integration therefore has three narrow pieces:
+
+```text
+Codex MCP stdio
+      │ SSH stdin/stdout
+      ▼
+XP mcp_stdio_forward.py ── TCP loopback ──> visible clippy_agent.py --mcp-tcp
+                                                    │
+                                                    ▼
+                                             Agent.Control.2
+```
+
+The XP listener binds only to `127.0.0.1:3211` and is started by the user's
+interactive Startup entry from `scripts/service/clippy_mcp_start.bat`. The
+SSH bridge carries protocol bytes only and has no COM, shell-tool, or desktop
+control surface. A Codex MCP registration starts one bridge per session; the
+visible XP listener can accept successive connections.
+
 The XP dependency is intentionally pinned to the period-compatible 32-bit
 pywin32 build 220 installer. `comtypes` 1.2.1 imports on Python 3.4 and can
 create `Agent.Control.2`, but both dynamic and generated dispatch hung when

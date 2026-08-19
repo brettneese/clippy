@@ -61,4 +61,28 @@ structured content; Agent actions remain asynchronous and report
 The original JSON-RPC mode remains available for controller diagnostics. The
 MCP framing is intentionally direct in Python so the XP process retains one
 COM apartment and one persistent Agent connection; no shell, generic COM, or
-desktop-control surface is added.
+ desktop-control surface is added.
+
+## Persistent Codex connection
+
+The visible XP session can keep a loopback MCP listener running with:
+
+```text
+python -u C:\\clippy\\xp\\clippy_agent.py --mcp-tcp 127.0.0.1 3211
+```
+
+Install `scripts\\service\\clippy_mcp_start.bat` in Brett's Startup folder so
+the listener starts in the interactive desktop session. It binds only to XP
+loopback. Codex reaches it through the XP-side `mcp_stdio_forward.py` bridge
+over the existing SSH connection; the bridge carries MCP bytes but never
+creates an Agent COM client.
+
+On the Mac, register that bridge with the installed Codex CLI:
+
+```text
+codex mcp add clippy -- /usr/bin/ssh -T windows-xp "python -u C:\\clippy\\xp\\mcp_stdio_forward.py 127.0.0.1 3211"
+```
+
+The visible listener must already be running before Codex starts a Clippy MCP
+session. The Codex client may need a new session after registration so the new
+server enters its tool inventory.

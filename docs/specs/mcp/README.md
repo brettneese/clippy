@@ -213,6 +213,16 @@ adapter operation. The XP-facing action vocabulary and safety constraints in
 this document are unchanged, and Agent calls still report `queued: true`
 until completion/error observation is implemented.
 
+### Persistent Codex service boundary
+
+For a persistent Codex connection, run the direct MCP server in the visible XP
+desktop with `--mcp-tcp 127.0.0.1 3211`. The listener is loopback-only and is
+started from the interactive user's Startup folder. Codex launches
+`mcp_stdio_forward.py` over the existing `windows-xp` SSH alias; that bridge
+forwards MCP stdin/stdout to the XP loopback listener and never creates COM.
+This preserves the visible-session requirement while allowing Codex's stdio
+MCP client to register the service with `codex mcp add clippy`.
+
 Protocol references consulted for this draft:
 
 * [MCP lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)

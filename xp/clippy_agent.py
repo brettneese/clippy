@@ -1,6 +1,7 @@
 from __future__ import print_function
 
 import json
+import socket
 import sys
 
 
@@ -642,6 +643,73 @@ def serve_mcp(stdin=None, stdout=None, controller=None):
         active_controller.close()
 
 
+def serve_mcp_socket(host, port):
+    """Keep the visible XP MCP owner available to a local SSH bridge."""
+    if host not in ("127.0.0.1", "localhost"):
+        raise ValueError("MCP service must bind to loopback")
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind((host, port))
+    listener.listen(1)
+    sys.stderr.write(
+        "Clippy MCP service listening on {0}:{1}\n".format(host, port)
+    )
+    sys.stderr.flush()
+
+    try:
+        while True:
+            connection, _address = listener.accept()
+            input_stream = SocketInput(connection)
+            output_stream = SocketOutput(connection)
+            try:
+                try:
+                    serve_mcp(input_stream, output_stream)
+                except Exception as error:
+                    _log_internal_error(error)
+            finally:
+                connection.close()
+    finally:
+        listener.close()
+
+
+class SocketInput(object):
+    def __init__(self, connection):
+        self.connection = connection
+        self.buffer = b""
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        while b"\n" not in self.buffer:
+            data = self.connection.recv(4096)
+            if not data:
+                if self.buffer:
+                    data = self.buffer
+                    self.buffer = b""
+                    return data
+                raise StopIteration()
+            self.buffer += data
+
+        line, self.buffer = self.buffer.split(b"\n", 1)
+        return line + b"\n"
+
+    next = __next__
+
+
+class SocketOutput(object):
+    def __init__(self, connection):
+        self.connection = connection
+
+    def write(self, data):
+        self.connection.sendall(data)
+        return len(data)
+
+    def flush(self):
+        pass
+
+
 def serve(stdin=None, stdout=None, controller=None):
     input_stream = stdin or sys.stdin.buffer
     output_stream = stdout or sys.stdout.buffer
@@ -702,7 +770,9 @@ def serve(stdin=None, stdout=None, controller=None):
 
 
 if __name__ == "__main__":
-    if "--mcp" in sys.argv[1:]:
+    if len(sys.argv) == 4 and sys.argv[1] == "--mcp-tcp":
+        serve_mcp_socket(sys.argv[2], int(sys.argv[3]))
+    elif "--mcp" in sys.argv[1:]:
         serve_mcp()
     else:
         serve()
