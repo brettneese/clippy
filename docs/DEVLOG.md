@@ -673,3 +673,36 @@ rg -n "Phase 3|Phase 4|Phase 5|Phase 6|Open architecture decision" \
 No XP binaries, controller code, or runtime behavior changed in this milestone;
 the remaining work is the Phase 3 implementation decision and MCP adapter or
 direct-server build.
+
+## 2026-08-19 - Phase 3 direct MCP server
+
+Implemented the phase 3 MCP lifecycle and fixed Clippy tool surface directly
+in `xp/clippy_agent.py`. The `--mcp` entry point pins protocol version
+`2025-11-25`, accepts one UTF-8 JSON-RPC message per stdin line, requires
+`initialize` followed by `notifications/initialized`, advertises only the
+`tools` capability, and exposes the seven `clippy.*` tools from the existing
+controller. Tool calls return MCP `content` plus `structuredContent`, normal
+argument/animation failures are `isError` tool results, and unknown methods or
+lifecycle violations are JSON-RPC errors. EOF now hides, stops, and unloads
+the character before exit.
+
+The architecture decision is direct MCP in Python rather than a modern child
+process adapter. This preserves one XP COM apartment and one persistent Agent
+connection; the original line JSON-RPC mode remains available for diagnostics.
+
+Host-side validation:
+
+```text
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v xp.test_clippy_agent
+=> 11 tests passed
+
+PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile xp/clippy_agent.py
+=> clean
+```
+
+The new fixtures cover initialize/version negotiation, capability discovery,
+notifications, exact tool discovery, successful calls, safe tool errors,
+malformed/pre-initialized requests, and clean EOF teardown using fake COM.
+Known limitations remain: the real Agent calls are asynchronous and report
+`queued: true` without completion/error observation, and visible XP/UTM
+acceptance still must be run from the XP desktop rather than SSH.

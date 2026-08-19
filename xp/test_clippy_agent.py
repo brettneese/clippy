@@ -4,7 +4,15 @@ import io
 import json
 import unittest
 
-from xp.clippy_agent import ClippyController, JsonRpcServer, InvalidParams, serve
+from xp.clippy_agent import (
+    ClippyController,
+    JsonRpcServer,
+    InvalidParams,
+    McpServer,
+    MCP_PROTOCOL_VERSION,
+    serve,
+    serve_mcp,
+)
 
 
 class FakeBalloon(object):
@@ -235,6 +243,144 @@ class JsonRpcServerTests(unittest.TestCase):
         self.assertEqual(-32600, responses[1]["error"]["code"])
         self.assertIsNone(responses[0]["id"])
         self.assertIsNone(responses[1]["id"])
+
+
+class McpServerTests(unittest.TestCase):
+    def _initialize(self):
+        return {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": "fixture", "version": "1.0"},
+            },
+        }
+
+    def test_lifecycle_tools_and_notifications_use_mcp_shapes(self):
+        agent = FakeAgent()
+        controller = PumpingController(lambda: agent)
+        requests = [
+            self._initialize(),
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {"name": "clippy.speak", "arguments": {"text": "Hello"}},
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {"name": "clippy.animations", "arguments": {}},
+            },
+        ]
+        source = b"".join(
+            json.dumps(request).encode("utf-8") + b"\n" for request in requests
+        )
+        output = io.BytesIO()
+
+        serve_mcp(io.BytesIO(source), output, controller)
+
+        responses = [
+            json.loads(line.decode("utf-8"))
+            for line in output.getvalue().splitlines()
+        ]
+        self.assertEqual([1, 2, 3, 4], [item["id"] for item in responses])
+        self.assertEqual(MCP_PROTOCOL_VERSION, responses[0]["result"]["protocolVersion"])
+        self.assertEqual({"tools": {}}, responses[0]["result"]["capabilities"])
+        self.assertEqual(
+            [
+                "clippy.animations",
+                "clippy.show",
+                "clippy.hide",
+                "clippy.move",
+                "clippy.speak",
+                "clippy.think",
+                "clippy.play",
+            ],
+            [tool["name"] for tool in responses[1]["result"]["tools"]],
+        )
+        self.assertEqual(
+            {"queued": True}, responses[2]["result"]["structuredContent"]
+        )
+        self.assertEqual(
+            ["Greeting", "Thinking", "Wave"],
+            responses[3]["result"]["structuredContent"]["animations"],
+        )
+        self.assertEqual([("speak", "Hello")], agent.character.calls[:1])
+        self.assertIn(("hide",), agent.character.calls)
+        self.assertEqual(["Clippy"], agent.Characters.unloaded)
+
+    def test_tool_failures_are_tool_results_and_never_reach_com(self):
+        agent = FakeAgent()
+        controller = ClippyController(lambda: agent)
+        server = McpServer(controller)
+        server.handle(self._initialize())
+        server.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
+
+        response = server.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "clippy.play",
+                    "arguments": {"animation": "NotInstalled"},
+                },
+            }
+        )
+
+        self.assertTrue(response["isError"])
+        self.assertEqual(
+            "The requested animation is not installed in Clippit.",
+            response["structuredContent"]["error"],
+        )
+        self.assertEqual([], agent.character.calls)
+        controller.close()
+
+    def test_unsupported_version_is_safe_and_does_not_connect(self):
+        agent = FakeAgent()
+        controller = ClippyController(lambda: agent)
+        request = self._initialize()
+        request["params"]["protocolVersion"] = "1999-01-01"
+        output = io.BytesIO()
+
+        serve_mcp(
+            io.BytesIO(json.dumps(request).encode("utf-8") + b"\n"),
+            output,
+            controller,
+        )
+
+        response = json.loads(output.getvalue().decode("utf-8"))
+        self.assertEqual(-32602, response["error"]["code"])
+        self.assertIn(MCP_PROTOCOL_VERSION, response["error"]["message"])
+        self.assertNotIn("CLIPPIT.ACS", response["error"]["message"])
+        self.assertEqual([], agent.Characters.loaded)
+
+    def test_malformed_and_preinitialized_requests_receive_protocol_errors(self):
+        agent = FakeAgent()
+        controller = ClippyController(lambda: agent)
+        requests = [
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+            [],
+        ]
+        source = b"".join(
+            json.dumps(request).encode("utf-8") + b"\n" for request in requests
+        )
+        output = io.BytesIO()
+
+        serve_mcp(io.BytesIO(source), output, controller)
+
+        responses = [
+            json.loads(line.decode("utf-8"))
+            for line in output.getvalue().splitlines()
+        ]
+        self.assertEqual(-32002, responses[0]["error"]["code"])
+        self.assertEqual(-32600, responses[1]["error"]["code"])
 
 
 if __name__ == "__main__":

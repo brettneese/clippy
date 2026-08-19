@@ -1,6 +1,6 @@
 # Clippy MCP design
 
-Status: implementation-ready design draft, 2026-08-19
+Status: phase 3 implemented, 2026-08-19
 
 This specification defines the next protocol work after the completed Phase
 1/2 global Microsoft Agent foundation. It is intentionally Clippy-specific:
@@ -64,14 +64,14 @@ The following are outside this design:
 | Phase | Status | Deliverable | Exit evidence |
 | --- | --- | --- | --- |
 | 1/2 | Complete | Persistent Python controller with show, hide, move, speak, think, runtime animation enumeration/guarding, and line JSON-RPC foundation. | XP Python 3.4.4 tests pass; visible UTM session shows Clippy, a verified animation, Think/Speak, invalid-animation rejection, and clean shutdown. |
-| 3 | Next | Minimal MCP lifecycle, stdio framing, `tools/list`, and initial Clippy tools over the existing fixed action surface. | Protocol fixture tests cover initialize, capability negotiation, tool discovery/calls, notifications, malformed requests, and EOF shutdown. |
+| 3 | Complete | Minimal MCP lifecycle, stdio framing, `tools/list`, and initial Clippy tools over the existing fixed action surface. | Python fixture tests cover initialize, capability negotiation, tool discovery/calls, notifications, malformed requests, unsupported versions, tool errors, and EOF shutdown. |
 | 4 | Planned | Tightly scoped read-only XP automation with an explicit confirmation gate. | Every read-only tool has an allowlist, bounded output, confirmation behavior, and a denied-path test. |
 | 5 | Planned | Word-native Office Assistant integration as a separate capability with intentional visible handoff. | User-visible XP acceptance shows the original Assistant UI; no hidden Word automation is used. |
 | 6 | Planned | Full XP validation and documentation synchronization. | Reproducible test commands, fresh screenshots/logs, architecture/devlog updates, and no generated artifacts committed. |
 
-Phase 3 must select and pin one MCP protocol version supported by the client
-and implementation. The examples below describe the required message shapes;
-the version string must be rechecked when implementation begins.
+Phase 3 pins MCP protocol version `2025-11-25`, the current stable version
+used by the implementation and the official lifecycle, stdio, and tools
+references below.
 
 ## Phase 3: minimal MCP server
 
@@ -192,9 +192,9 @@ include:
 * explicit recording of limitations, especially queued Agent requests and
   visible-session lifecycle behavior.
 
-## Open architecture decision
+## Resolved architecture decision
 
-Phase 3 still has two viable placements for the MCP framing:
+The two placements considered for the MCP framing were:
 
 1. **Direct MCP in Python** — extend `xp/clippy_agent.py` with MCP lifecycle,
    schema, and tool dispatch. This keeps one process and one COM apartment, but
@@ -205,12 +205,16 @@ Phase 3 still has two viable placements for the MCP framing:
    makes protocol evolution easier, but adds process supervision and a second
    error boundary.
 
-The decision must be made before Phase 3 implementation. Whichever option is
-chosen, the XP-facing action vocabulary and safety constraints in this document
-remain unchanged.
+Phase 3 selects **direct MCP in Python**. `xp/clippy_agent.py --mcp` adds the
+MCP lifecycle and tool translation around the existing `ClippyController`,
+keeping one process, one COM apartment, and one persistent Agent connection.
+The original line JSON-RPC mode remains available as a private diagnostic
+adapter operation. The XP-facing action vocabulary and safety constraints in
+this document are unchanged, and Agent calls still report `queued: true`
+until completion/error observation is implemented.
 
 Protocol references consulted for this draft:
 
 * [MCP lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)
-* [MCP stdio transport](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)
-* [MCP tools](https://modelcontextprotocol.io/specification/2025-06-18/server/tools)
+* [MCP stdio transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)
+* [MCP tools](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)

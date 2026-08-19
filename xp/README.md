@@ -45,6 +45,20 @@ only names enumerated from the loaded `CLIPPIT.ACS` during that process.
 Batch arrays are deliberately rejected; the foundation accepts exactly one
 request object per input line.
 
-This newline protocol is a testable transport foundation, not an MCP server.
-The next protocol phase can wrap the same `ClippyController` methods as a
-small, fixed MCP tool set without exposing shell or general desktop control.
+The phase 3 MCP server is the same Python process with the `--mcp` switch:
+
+```text
+python -u xp\clippy_agent.py --mcp
+```
+
+It pins MCP protocol version `2025-11-25`, uses the same one-message-per-line
+UTF-8 stdio transport, and exposes only the fixed `clippy.*` tool set. The
+server requires `initialize` followed by `notifications/initialized` before
+listing or calling tools. Tool results include a short text content item and
+structured content; Agent actions remain asynchronous and report
+`queued: true`. EOF hides and unloads Clippy before the process exits.
+
+The original JSON-RPC mode remains available for controller diagnostics. The
+MCP framing is intentionally direct in Python so the XP process retains one
+COM apartment and one persistent Agent connection; no shell, generic COM, or
+desktop-control surface is added.

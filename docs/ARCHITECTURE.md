@@ -33,21 +33,21 @@ checkpoint remain complete:
 * Word renders model-generated Markdown-lite with native Assistant balloon
   colors, underlining, and list labels
 
-The first foundation for a desktop-wide host is also complete. A Python
-3.4-compatible process on XP now owns the real Microsoft Agent character
+The first foundation for a desktop-wide host is complete. A Python
+3.4-compatible process on XP owns the real Microsoft Agent character
 independently of Word and exposes a fixed JSON-RPC command surface for show,
 hide, move, speak, think, installed-animation enumeration, and guarded play.
-The process keeps one `Agent.Control.2` connection and one loaded
-`CLIPPIT.ACS` character for the full stdin session. This is a transport and COM
-foundation, not yet an MCP server.
+The same process now exposes phase 3 MCP over stdio with `--mcp`, pinned to
+protocol version `2025-11-25`, while keeping one `Agent.Control.2` connection
+and one loaded `CLIPPIT.ACS` character for the full session.
 
 Microsoft Agent is now the primary desktop-wide Clippy host. The Word COM
 add-in remains a working, Office-specific input and rich-balloon integration;
-it is not the component boundary for global Clippy control. The next global
-protocol decision is whether to implement the minimal MCP adapter directly in
-the Python process or keep JSON-RPC as an internal child-process boundary. MCP
-tool names, lifecycle negotiation, and Agent request-completion reporting
-remain open.
+it is not the component boundary for global Clippy control. Direct MCP in the
+Python process is the selected phase 3 boundary: it preserves the single XP
+COM apartment and keeps the existing JSON-RPC mode available for diagnostics.
+MCP tools and lifecycle negotiation are implemented; Agent request completion
+remains queued-only until completion/error observation is added.
 
 ┌──────────────────────────── macOS ────────────────────────────┐
 │                                                              │
@@ -138,6 +138,15 @@ actions are asynchronous; a `{"queued":true}` result means the COM call
 returned without a synchronous error, not that the animation request later
 completed successfully.
 
+With `python -u xp\clippy_agent.py --mcp`, the same controller serves MCP
+protocol version `2025-11-25` over newline-delimited UTF-8 stdio. It requires
+`initialize` and `notifications/initialized`, then exposes exactly the seven
+`clippy.*` tools through `tools/list` and `tools/call`. Tool actions return
+short text content plus structured content, with `queued: true` for
+asynchronous Agent requests. The MCP path has no prompts, resources, logging,
+sampling, shell, input injection, generic COM, or broad desktop-control
+capability. EOF hides and unloads Clippy.
+
 The XP dependency is intentionally pinned to the period-compatible 32-bit
 pywin32 build 220 installer. `comtypes` 1.2.1 imports on Python 3.4 and can
 create `Agent.Control.2`, but both dynamic and generated dispatch hung when
@@ -222,7 +231,7 @@ No modern coding-agent runtime needs to run on XP itself.
 
 Major Milestones
 
-Global Microsoft Agent host track — Phase 1/2 foundation complete
+Global Microsoft Agent host track — Phase 3 MCP complete
 
 The desktop-wide track now has a persistent Python controller and a narrow,
 tested newline JSON-RPC adapter. The real XP acceptance covered runtime
@@ -230,15 +239,13 @@ animation enumeration, show, hide, move, Greeting play, think, speak, rejection
 of a fabricated animation, and clean shutdown. Visible evidence is preserved
 in `docs/screenshots/clippy-global-controller.jpg`.
 
-The follow-on MCP design is recorded in `docs/specs/mcp/README.md`. Phase 3 is
-the next implementation milestone: MCP lifecycle negotiation, newline stdio
-framing, and initial fixed Clippy tools. Phase 4 remains tightly scoped
-read-only XP automation with explicit confirmation; Phase 5 is separate
-Word-native Assistant integration with intentional visible handoff; and Phase 6
-is final XP validation and documentation synchronization. The architecture
-decision between direct MCP in Python and an MCP adapter around the current
-JSON-RPC controller remains open. Agent request completion/error observation
-must be designed before actions are represented as completed rather than queued.
+The phase 3 MCP implementation is recorded in `docs/specs/mcp/README.md`.
+Phase 4 remains tightly scoped read-only XP automation with explicit
+confirmation; Phase 5 is separate Word-native Assistant integration with
+intentional visible handoff; and Phase 6 is final XP validation and
+documentation synchronization. Agent request completion/error observation
+must be designed before actions are represented as completed rather than
+queued.
 
 Historical Word integration track
 
