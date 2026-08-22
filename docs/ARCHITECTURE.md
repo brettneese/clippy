@@ -261,6 +261,10 @@ of a fabricated animation, and clean shutdown. Visible evidence is preserved
 in `docs/screenshots/clippy-global-controller.jpg`.
 
 The phase 3 MCP implementation is recorded in `docs/specs/mcp/README.md`.
+Its initialize path supports both MCP `2025-06-18` (used by the current
+Codex desktop app-server) and `2025-11-25`, and accepts standard request
+`_meta` fields on lifecycle and tool requests. Tool arguments remain
+strictly allowlisted.
 Phase 4 remains tightly scoped read-only XP automation with explicit
 confirmation; Phase 5 is separate Word-native Assistant integration with
 intentional visible handoff; and Phase 6 is final XP validation and

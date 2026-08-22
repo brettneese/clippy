@@ -10,6 +10,7 @@ from xp.clippy_agent import (
     InvalidParams,
     McpServer,
     MCP_PROTOCOL_VERSION,
+    MCP_SUPPORTED_PROTOCOL_VERSIONS,
     serve,
     serve_mcp,
 )
@@ -264,12 +265,21 @@ class McpServerTests(unittest.TestCase):
         requests = [
             self._initialize(),
             {"jsonrpc": "2.0", "method": "notifications/initialized"},
-            {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list",
+                "params": {"_meta": {"progressToken": 0}},
+            },
             {
                 "jsonrpc": "2.0",
                 "id": 3,
                 "method": "tools/call",
-                "params": {"name": "clippy.speak", "arguments": {"text": "Hello"}},
+                "params": {
+                    "name": "clippy.speak",
+                    "arguments": {"text": "Hello"},
+                    "_meta": {"progressToken": 1},
+                },
             },
             {
                 "jsonrpc": "2.0",
@@ -357,9 +367,32 @@ class McpServerTests(unittest.TestCase):
 
         response = json.loads(output.getvalue().decode("utf-8"))
         self.assertEqual(-32602, response["error"]["code"])
-        self.assertIn(MCP_PROTOCOL_VERSION, response["error"]["message"])
+        for version in MCP_SUPPORTED_PROTOCOL_VERSIONS:
+            self.assertIn(version, response["error"]["message"])
         self.assertNotIn("CLIPPIT.ACS", response["error"]["message"])
         self.assertEqual([], agent.Characters.loaded)
+
+    def test_codex_protocol_version_is_negotiated(self):
+        agent = FakeAgent()
+        controller = PumpingController(lambda: agent)
+        request = self._initialize()
+        request["params"]["protocolVersion"] = "2025-06-18"
+        output = io.BytesIO()
+
+        serve_mcp(
+            io.BytesIO(json.dumps(request).encode("utf-8") + b"\n"),
+            output,
+            controller,
+        )
+
+        response = json.loads(output.getvalue().decode("utf-8"))
+        self.assertEqual(
+            "2025-06-18", response["result"]["protocolVersion"]
+        )
+        self.assertEqual(
+            [("Clippy", r"C:\Program Files\Microsoft Office\Office10\CLIPPIT.ACS")],
+            agent.Characters.loaded,
+        )
 
     def test_malformed_and_preinitialized_requests_receive_protocol_errors(self):
         agent = FakeAgent()

@@ -69,9 +69,11 @@ The following are outside this design:
 | 5 | Planned | Word-native Office Assistant integration as a separate capability with intentional visible handoff. | User-visible XP acceptance shows the original Assistant UI; no hidden Word automation is used. |
 | 6 | Planned | Full XP validation and documentation synchronization. | Reproducible test commands, fresh screenshots/logs, architecture/devlog updates, and no generated artifacts committed. |
 
-Phase 3 pins MCP protocol version `2025-11-25`, the current stable version
-used by the implementation and the official lifecycle, stdio, and tools
-references below.
+Phase 3 supports MCP protocol versions `2025-06-18` and `2025-11-25`. The
+server returns the client-requested supported version in its initialize result;
+`2025-11-25` remains the implementation's preferred/current version. This
+compatibility is required by the Codex desktop app-server, which currently
+initializes stdio servers with `2025-06-18`.
 
 ## Phase 3: minimal MCP server
 
@@ -85,7 +87,7 @@ The server state machine is:
 
 1. `STARTING`: create or attach to the persistent controller, but do not
    expose tools before protocol initialization.
-2. `INITIALIZED`: accept only `initialize` first, negotiate the pinned protocol
+2. `INITIALIZED`: accept only `initialize` first, negotiate a supported protocol
    version, and return implementation information plus the `tools` capability.
 3. `READY`: require the `notifications/initialized` notification before
    serving `tools/list` or `tools/call`.
@@ -100,7 +102,7 @@ initial one-message-per-line contract.
 Required lifecycle messages:
 
 ```json
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"<pinned-version>","capabilities":{},"clientInfo":{"name":"<client>","version":"<client-version>"}}}
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"<supported-version>","capabilities":{},"clientInfo":{"name":"<client>","version":"<client-version>"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized"}
 ```
 
@@ -108,6 +110,9 @@ The initialize result must contain the negotiated `protocolVersion`,
 `capabilities: {"tools": {}}`, and `serverInfo` identifying this as the
 Clippy XP Agent server. An unsupported version is a JSON-RPC `-32602` error
 with a safe supported-version list; it must not start a second controller.
+Standard MCP request metadata under `params._meta` is accepted on lifecycle
+and tool requests; it is transport metadata and is not passed into tool
+argument validation.
 Normal stdio shutdown is initiated by closing stdin and waiting for the server
 to exit. A private `clippy.shutdown` method may remain as a test-only adapter
 operation, but it is not an MCP tool.

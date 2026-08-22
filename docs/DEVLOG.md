@@ -740,3 +740,36 @@ Python files compile under the host interpreter, and `git diff --check` is
 clean. The Codex desktop session must be restarted or opened as a new session
 before the newly registered server enters its live tool inventory. The visible
 XP Startup listener must be running before that session connects.
+
+## 2026-08-21 - Codex MCP compatibility and request metadata
+
+Fixed the Codex desktop integration in `xp/clippy_agent.py`. The server now
+negotiates MCP `2025-06-18` as well as its existing `2025-11-25` version,
+returns the client-requested supported version, and accepts standard `_meta`
+request fields on initialize, lifecycle, `tools/list`, and `tools/call`.
+Tool argument validation remains strict and does not treat `_meta` as a tool
+argument.
+
+The failure was reproduced through a captured Codex app-server request:
+`tools/list` included `params._meta.progressToken`; the previous strict
+validator raised the internal `InvalidParams` exception outside the
+`McpError` handler, logged `Unhandled MCP server error`, and returned
+JSON-RPC `-32603`.
+
+Validation:
+
+```text
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v xp.test_clippy_agent
+=> 12 tests passed
+
+PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile xp/clippy_agent.py xp/mcp_stdio_forward.py
+=> clean
+
+Codex app-server mcpServerStatus/list through the SSH bridge
+=> clippy-xp-agent with all seven clippy.* tools
+```
+
+The patched controller was copied to the XP VM and relaunched in the existing
+interactive desktop session without rebooting the guest or host. The current
+remaining limitation is that the live Codex task may need a fresh MCP
+inventory refresh before the newly discovered tools appear in its tool list.

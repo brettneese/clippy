@@ -13,6 +13,7 @@ MAX_TEXT_LENGTH = 2000
 MIN_COORDINATE = -32768
 MAX_COORDINATE = 32767
 MCP_PROTOCOL_VERSION = "2025-11-25"
+MCP_SUPPORTED_PROTOCOL_VERSIONS = ("2025-06-18", MCP_PROTOCOL_VERSION)
 MCP_SERVER_INFO = {
     "name": "clippy-xp-agent",
     "version": "0.3.0",
@@ -318,7 +319,7 @@ class McpServer(object):
         if method == "notifications/initialized":
             if has_id:
                 raise McpError(-32600, "notifications/initialized is a notification")
-            _exact_params(params, ())
+            _exact_params(params, (), optional=("_meta",))
             if self.state != self.INITIALIZED:
                 raise McpError(-32002, "notifications/initialized is not expected")
             self.state = self.READY
@@ -330,11 +331,13 @@ class McpServer(object):
             raise McpError(-32002, "Server is waiting for notifications/initialized")
 
         if method == "tools/list":
-            _exact_params(params, ())
+            _exact_params(params, (), optional=("_meta",))
             return {"tools": _mcp_tools()}
 
         if method == "tools/call":
-            _exact_params(params, ("name",), optional=("arguments",))
+            _exact_params(
+                params, ("name",), optional=("arguments", "_meta")
+            )
             if not isinstance(params.get("name"), str):
                 raise McpError(-32602, "tools/call name must be a string")
             arguments = params.get("arguments", {})
@@ -352,12 +355,14 @@ class McpServer(object):
         _exact_params(
             params,
             ("protocolVersion", "capabilities", "clientInfo"),
+            optional=("_meta",),
         )
-        if params["protocolVersion"] != MCP_PROTOCOL_VERSION:
+        protocol_version = params["protocolVersion"]
+        if protocol_version not in MCP_SUPPORTED_PROTOCOL_VERSIONS:
             raise McpError(
                 -32602,
                 "Unsupported protocol version; supported versions: {0}".format(
-                    MCP_PROTOCOL_VERSION
+                    ", ".join(MCP_SUPPORTED_PROTOCOL_VERSIONS)
                 ),
             )
         if not isinstance(params["capabilities"], dict):
@@ -378,7 +383,7 @@ class McpServer(object):
 
         self.state = self.INITIALIZED
         return {
-            "protocolVersion": MCP_PROTOCOL_VERSION,
+            "protocolVersion": protocol_version,
             "capabilities": {"tools": {}},
             "serverInfo": dict(MCP_SERVER_INFO),
         }
