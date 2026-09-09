@@ -817,3 +817,69 @@ The listener remains intentionally serial and supports one active MCP client
 at a time. This change guarantees prompt cleanup after that client closes; it
 does not add concurrent COM clients or interrupt an Agent COM call already in
 progress.
+
+## 2026-09-08 - Add metadata-only MCP transport diagnostics
+
+Added best-effort JSONL instrumentation to the persistent XP MCP service and
+the SSH stdio bridge. `C:\clippy\ClippyMcp.log` records listener, session,
+controller initialization, safe MCP method/tool routing, response write,
+message-pump, error-type, and socket-close events.
+`C:\clippy\ClippyMcpBridge.log` records safe stdin/TCP/stdout byte-flow and
+bounded-shutdown events. Neither file records request IDs, params, tool
+arguments, user text, caller-supplied animation names, or complete JSON-RPC
+payloads. Logging failures are intentionally ignored so diagnostics cannot
+contaminate stdout or fail MCP work.
+
+Focused host verification:
+
+```text
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v \
+  xp.test_clippy_agent xp.test_mcp_stdio_forward
+=> 19 tests passed
+
+PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
+  xp/clippy_agent.py xp/mcp_stdio_forward.py xp/mcp_diagnostics.py
+=> passed
+
+git diff --check
+=> passed
+```
+
+Copied `clippy_agent.py`, `mcp_stdio_forward.py`, `mcp_diagnostics.py`, and the
+two focused test files into `C:\clippy\xp`. The first visible restart exposed
+a Python 3.4 direct-script difference: a failed relative import raises
+`SystemError`, not `ImportError`. Both runtime scripts now include that legacy
+exception in their sibling-module fallback. The complete XP suite then passed:
+
+```text
+C:\Python34\python.exe -m unittest -v \
+  xp.test_clippy_agent xp.test_mcp_stdio_forward
+=> 19 tests passed on Python 3.4.4
+```
+
+Relaunched the final listener from the visible UTM desktop as PID 3016.
+A standalone SSH bridge session negotiated MCP `2025-06-18`, returned all
+seven tools, and returned 43 installed animations from `clippy.animations`.
+The service log showed controller connect plus dispatch/response completion;
+the bridge log showed all four requests crossing TCP and both response chunks
+reaching stdout. Both sides recorded EOF and clean close, after which the same
+listener returned to `tcp_accept_wait` with only a normal `TIME_WAIT` socket.
+The same session sent an unknown method containing a unique sentinel; both
+logs recorded its method as `other`, and a search confirmed that the sentinel
+itself was absent from both files.
+
+A second live session initialized, queued `clippy.show` and `clippy.think`, and
+then held stdin open for 15 seconds. At ten seconds the bridge log recorded
+`bridge_receive_error` with `error_type` `timeout`. This demonstrates that the
+socket returned by `socket.create_connection(..., timeout=10)` retains that
+timeout for normal receives: after ten idle seconds its receiver exits, while
+the stdin/send side can remain alive. A later request can therefore reach XP
+without any bridge thread left to forward the response, which is a strong
+match for the observed Codex-side hang. Fixing that transport behavior is the
+next task; this diagnostics change intentionally records rather than alters it.
+
+The already-open Codex task still owns the pre-instrumentation SSH bridge that
+was disconnected when the listener restarted. A fresh Codex app/task is
+required to launch the instrumented bridge and reproduce the earlier
+app-specific hanging tool call; the completed standalone acceptance proves the
+new logger and the underlying XP request path, not current-task reconnection.

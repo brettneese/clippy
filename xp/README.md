@@ -100,3 +100,29 @@ allows two seconds for the XP service to finish its final output. If the
 service does not finish, the bridge fully closes the socket and exits instead
 of waiting forever. The TCP listener remains intentionally serial: one active
 MCP client owns Clippy at a time, while closed clients are cleaned up promptly.
+
+## MCP diagnostics
+
+The persistent service and each SSH bridge append separate JSONL diagnostics:
+
+```text
+C:\clippy\ClippyMcp.log
+C:\clippy\ClippyMcpBridge.log
+```
+
+The service log covers listener startup, accept/session lifecycle, controller
+connection, MCP method and tool dispatch, response writes, message pumping,
+errors, and client close. The bridge log covers Codex stdin reads, TCP sends
+and receives, stdout writes, EOF, errors, and bounded shutdown. Entries include
+only routing metadata such as timestamp, PID, session/sequence number, method,
+tool name, byte count, state, and error type. They never include request IDs,
+params, tool arguments, message text, animation names supplied by a caller, or
+full MCP payloads. Log writes are best-effort and cannot write to MCP stdout or
+fail a request.
+
+Read the current logs over SSH without starting another COM controller:
+
+```text
+type C:\clippy\ClippyMcp.log
+type C:\clippy\ClippyMcpBridge.log
+```

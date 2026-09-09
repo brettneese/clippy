@@ -4,6 +4,17 @@ import json
 import socket
 import sys
 
+try:
+    from .mcp_diagnostics import DiagnosticLog
+    from .mcp_diagnostics import SERVER_LOG_PATH
+    from .mcp_diagnostics import emit as _emit_diagnostic
+    from .mcp_diagnostics import protocol_metadata
+except (ImportError, ValueError, SystemError):
+    from mcp_diagnostics import DiagnosticLog
+    from mcp_diagnostics import SERVER_LOG_PATH
+    from mcp_diagnostics import emit as _emit_diagnostic
+    from mcp_diagnostics import protocol_metadata
+
 
 CHARACTER_KEY = "Clippy"
 CHARACTER_PATH = (
@@ -288,9 +299,16 @@ class McpServer(object):
     READY = "READY"
     STOPPING = "STOPPING"
 
-    def __init__(self, controller):
+    def __init__(self, controller, diagnostics=None, session_id=None):
         self.controller = controller
         self.state = self.STARTING
+        self.diagnostics = diagnostics
+        self.session_id = session_id
+
+    def _emit(self, event, **fields):
+        fields["session"] = self.session_id
+        fields["state"] = self.state
+        _emit_diagnostic(self.diagnostics, event, **fields)
 
     def handle(self, request):
         if not isinstance(request, dict) or request.get("jsonrpc") != "2.0":
@@ -375,13 +393,22 @@ class McpServer(object):
         ):
             raise McpError(-32602, "clientInfo requires string name and version")
 
+        self._emit("controller_connect_start")
         try:
             self.controller.connect()
-        except Exception:
+        except Exception as error:
+            self._emit(
+                "controller_connect_error",
+                error_type=type(error).__name__,
+            )
             _log_internal_error("MCP controller initialization failed")
             raise McpError(-32603, "Clippy Agent initialization failed")
 
         self.state = self.INITIALIZED
+        self._emit(
+            "controller_connect_complete",
+            animation_count=len(self.controller.animation_names()),
+        )
         return {
             "protocolVersion": protocol_version,
             "capabilities": {"tools": {}},
@@ -393,61 +420,71 @@ class McpServer(object):
         if name not in tools:
             raise McpError(-32601, "Unknown tool")
 
+        self._emit("tool_call_start", tool=name)
         try:
             if name == "clippy.animations":
                 _exact_params(arguments, ())
                 animations = self.controller.animation_names()
-                return _tool_success(
+                result = _tool_success(
                     "Clippy reported {0} installed animations.".format(
                         len(animations)
                     ),
                     {"animations": animations},
                 )
-            if name == "clippy.show":
+            elif name == "clippy.show":
                 _exact_params(arguments, ())
                 self.controller.show()
-                return _tool_success(
+                result = _tool_success(
                     "Clippy show request queued.", {"queued": True}
                 )
-            if name == "clippy.hide":
+            elif name == "clippy.hide":
                 _exact_params(arguments, ())
                 self.controller.hide()
-                return _tool_success(
+                result = _tool_success(
                     "Clippy hide request queued.", {"queued": True}
                 )
-            if name == "clippy.move":
+            elif name == "clippy.move":
                 _exact_params(arguments, ("x", "y"))
                 self.controller.move(arguments["x"], arguments["y"])
-                return _tool_success(
+                result = _tool_success(
                     "Clippy move request queued.",
                     {"queued": True, "x": arguments["x"], "y": arguments["y"]},
                 )
-            if name == "clippy.speak":
+            elif name == "clippy.speak":
                 _exact_params(arguments, ("text",))
                 self.controller.speak(arguments["text"])
-                return _tool_success(
+                result = _tool_success(
                     "Clippy speak request queued.", {"queued": True}
                 )
-            if name == "clippy.think":
+            elif name == "clippy.think":
                 _exact_params(arguments, ("text",))
                 self.controller.think(arguments["text"])
-                return _tool_success(
+                result = _tool_success(
                     "Clippy think request queued.", {"queued": True}
                 )
-            if name == "clippy.play":
+            elif name == "clippy.play":
                 _exact_params(arguments, ("animation",))
                 self.controller.play(arguments["animation"])
-                return _tool_success(
+                result = _tool_success(
                     "Clippy animation request queued.",
                     {"queued": True, "animation": arguments["animation"]},
                 )
+            else:
+                raise McpError(-32601, "Unknown tool")
         except InvalidParams as error:
+            self._emit("tool_call_invalid", tool=name)
             return _tool_error(_safe_tool_param_error(error))
-        except Exception:
+        except Exception as error:
+            self._emit(
+                "tool_call_error",
+                tool=name,
+                error_type=type(error).__name__,
+            )
             _log_internal_error("MCP Clippy tool operation failed")
             return _tool_error("Clippy could not queue that request.")
 
-        raise McpError(-32601, "Unknown tool")
+        self._emit("tool_call_complete", tool=name)
+        return result
 
     def close(self):
         self.state = self.STOPPING
@@ -593,19 +630,43 @@ def _mcp_error_response(request_id, error):
     }
 
 
-def serve_mcp(stdin=None, stdout=None, controller=None, close_controller=True):
+def serve_mcp(
+    stdin=None,
+    stdout=None,
+    controller=None,
+    close_controller=True,
+    diagnostics=None,
+    session_id=None,
+):
     """Serve MCP over one UTF-8 JSON-RPC message per stdin line."""
     input_stream = stdin if stdin is not None else sys.stdin.buffer
     output_stream = stdout if stdout is not None else sys.stdout.buffer
     active_controller = controller or ClippyController()
-    server = McpServer(active_controller)
+    server = McpServer(active_controller, diagnostics, session_id)
+    request_sequence = 0
+    _emit_diagnostic(
+        diagnostics,
+        "mcp_session_start",
+        session=session_id,
+        close_controller=close_controller,
+    )
 
     try:
         for raw_line in input_stream:
+            request_sequence += 1
             request = None
             request_id = None
             has_id = False
             is_notification = False
+            metadata = protocol_metadata(raw_line)
+            metadata.update(
+                {
+                    "session": session_id,
+                    "sequence": request_sequence,
+                    "bytes": len(raw_line),
+                }
+            )
+            _emit_diagnostic(diagnostics, "mcp_request_received", **metadata)
             try:
                 try:
                     request = json.loads(raw_line.decode("utf-8"))
@@ -620,16 +681,60 @@ def serve_mcp(stdin=None, stdout=None, controller=None, close_controller=True):
                         candidate_id, (int, float, str, type(None))
                     ):
                         request_id = candidate_id
+                _emit_diagnostic(
+                    diagnostics,
+                    "mcp_dispatch_start",
+                    session=session_id,
+                    sequence=request_sequence,
+                    method=metadata.get("method"),
+                    tool=metadata.get("tool"),
+                    state=server.state,
+                )
                 result = server.handle(request)
+                _emit_diagnostic(
+                    diagnostics,
+                    "mcp_dispatch_complete",
+                    session=session_id,
+                    sequence=request_sequence,
+                    method=metadata.get("method"),
+                    tool=metadata.get("tool"),
+                    state=server.state,
+                )
                 if has_id and result is not MCP_NO_RESPONSE:
+                    _emit_diagnostic(
+                        diagnostics,
+                        "mcp_response_write_start",
+                        session=session_id,
+                        sequence=request_sequence,
+                    )
                     _write_json(
                         output_stream,
                         {"jsonrpc": "2.0", "id": request_id, "result": result},
                     )
+                    _emit_diagnostic(
+                        diagnostics,
+                        "mcp_response_write_complete",
+                        session=session_id,
+                        sequence=request_sequence,
+                    )
             except McpError as error:
+                _emit_diagnostic(
+                    diagnostics,
+                    "mcp_protocol_error",
+                    session=session_id,
+                    sequence=request_sequence,
+                    error_code=error.code,
+                )
                 if not is_notification:
                     _write_json(output_stream, _mcp_error_response(request_id, error))
-            except Exception:
+            except Exception as error:
+                _emit_diagnostic(
+                    diagnostics,
+                    "mcp_internal_error",
+                    session=session_id,
+                    sequence=request_sequence,
+                    error_type=type(error).__name__,
+                )
                 _log_internal_error("Unhandled MCP server error")
                 if has_id and not is_notification:
                     _write_json(
@@ -639,25 +744,60 @@ def serve_mcp(stdin=None, stdout=None, controller=None, close_controller=True):
                             McpError(-32603, "Internal MCP server error"),
                         ),
                     )
-
+            _emit_diagnostic(
+                diagnostics,
+                "mcp_pump_start",
+                session=session_id,
+                sequence=request_sequence,
+            )
             active_controller.pump_messages()
+            _emit_diagnostic(
+                diagnostics,
+                "mcp_pump_complete",
+                session=session_id,
+                sequence=request_sequence,
+            )
             if server.state == server.STOPPING:
                 break
+        _emit_diagnostic(
+            diagnostics,
+            "mcp_input_eof",
+            session=session_id,
+            sequence=request_sequence,
+        )
     finally:
+        _emit_diagnostic(
+            diagnostics,
+            "mcp_session_close_start",
+            session=session_id,
+            close_controller=close_controller,
+        )
         server.close()
         if close_controller:
             active_controller.close()
+        _emit_diagnostic(
+            diagnostics,
+            "mcp_session_close_complete",
+            session=session_id,
+        )
 
 
-def _close_socket(connection):
+def _close_socket(connection, diagnostics=None, session_id=None):
+    _emit_diagnostic(diagnostics, "tcp_client_close_start", session=session_id)
     try:
         connection.shutdown(socket.SHUT_RDWR)
     except socket.error:
         pass
     connection.close()
+    _emit_diagnostic(diagnostics, "tcp_client_close_complete", session=session_id)
 
 
-def serve_mcp_connection(connection, controller):
+def serve_mcp_connection(
+    connection,
+    controller,
+    diagnostics=None,
+    session_id=None,
+):
     """Serve one MCP client and close its socket before returning."""
     input_stream = SocketInput(connection)
     output_stream = SocketOutput(connection)
@@ -667,16 +807,25 @@ def serve_mcp_connection(connection, controller):
             output_stream,
             controller,
             close_controller=False,
+            diagnostics=diagnostics,
+            session_id=session_id,
         )
     finally:
-        _close_socket(connection)
+        _close_socket(connection, diagnostics, session_id)
 
 
-def serve_mcp_socket(host, port):
+def serve_mcp_socket(host, port, diagnostics=None):
     """Keep the visible XP MCP owner available to a local SSH bridge."""
     if host not in ("127.0.0.1", "localhost"):
         raise ValueError("MCP service must bind to loopback")
 
+    active_diagnostics = diagnostics or DiagnosticLog(SERVER_LOG_PATH)
+    _emit_diagnostic(
+        active_diagnostics,
+        "tcp_service_start",
+        host=host,
+        port=port,
+    )
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind((host, port))
@@ -685,18 +834,50 @@ def serve_mcp_socket(host, port):
         "Clippy MCP service listening on {0}:{1}\n".format(host, port)
     )
     sys.stderr.flush()
+    _emit_diagnostic(
+        active_diagnostics,
+        "tcp_service_listening",
+        host=host,
+        port=port,
+    )
 
     active_controller = ClippyController()
+    session_id = 0
     try:
         while True:
-            connection, _address = listener.accept()
+            _emit_diagnostic(
+                active_diagnostics,
+                "tcp_accept_wait",
+                next_session=session_id + 1,
+            )
+            connection, address = listener.accept()
+            session_id += 1
+            _emit_diagnostic(
+                active_diagnostics,
+                "tcp_client_accepted",
+                session=session_id,
+                peer_port=address[1],
+            )
             try:
-                serve_mcp_connection(connection, active_controller)
+                serve_mcp_connection(
+                    connection,
+                    active_controller,
+                    active_diagnostics,
+                    session_id,
+                )
             except Exception as error:
+                _emit_diagnostic(
+                    active_diagnostics,
+                    "tcp_session_error",
+                    session=session_id,
+                    error_type=type(error).__name__,
+                )
                 _log_internal_error(error)
     finally:
+        _emit_diagnostic(active_diagnostics, "tcp_service_close_start")
         listener.close()
         active_controller.close()
+        _emit_diagnostic(active_diagnostics, "tcp_service_close_complete")
 
 
 class SocketInput(object):
@@ -799,6 +980,9 @@ if __name__ == "__main__":
     if len(sys.argv) == 4 and sys.argv[1] == "--mcp-tcp":
         serve_mcp_socket(sys.argv[2], int(sys.argv[3]))
     elif "--mcp" in sys.argv[1:]:
-        serve_mcp()
+        serve_mcp(
+            diagnostics=DiagnosticLog(SERVER_LOG_PATH),
+            session_id=1,
+        )
     else:
         serve()

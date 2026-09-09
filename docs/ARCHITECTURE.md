@@ -56,6 +56,14 @@ the one visible `Agent.Control.2` controller loaded until the service process
 itself exits. The SSH bridge also has a bounded two-second close path, so a
 nonresponsive server cannot leave the bridge waiting indefinitely.
 
+The boundary now records metadata-only JSONL diagnostics on XP. The persistent
+service appends to `C:\clippy\ClippyMcp.log`; each SSH stdio bridge appends to
+`C:\clippy\ClippyMcpBridge.log`. Entries correlate process, TCP session,
+request sequence, MCP method/tool name, byte count, lifecycle state, response
+write, and error type. They deliberately exclude request IDs, params, tool
+arguments, message text, animation arguments, and complete protocol payloads.
+Logging is best-effort and never writes to MCP stdout.
+
 ┌──────────────────────────── macOS ────────────────────────────┐
 │                                                              │
 │  Modern AI Agent                                             │
@@ -150,9 +158,11 @@ protocol version `2025-11-25` over newline-delimited UTF-8 stdio. It requires
 `initialize` and `notifications/initialized`, then exposes exactly the seven
 `clippy.*` tools through `tools/list` and `tools/call`. Tool actions return
 short text content plus structured content, with `queued: true` for
-asynchronous Agent requests. The MCP path has no prompts, resources, logging,
-sampling, shell, input injection, generic COM, or broad desktop-control
-capability. EOF hides and unloads Clippy.
+asynchronous Agent requests. The MCP path has no prompts, resources, MCP
+logging capability, sampling, shell, input injection, generic COM, or broad
+desktop-control capability. Its local metadata-only diagnostic files are an
+implementation debugging aid, not a source of request content. EOF hides and
+unloads Clippy.
 
 Persistent Codex service boundary
 
@@ -179,6 +189,13 @@ the process lifetime. The bridge waits at most two seconds for final server
 output before forcing its local socket closed. The listener remains serial and
 supports one active MCP client at a time, but it can accept successive sessions
 without per-session COM teardown or stale `CLOSE_WAIT` sockets.
+
+The two XP JSONL logs make the transport boundary observable without copying
+MCP contents. Bridge events show stdin read, TCP send, TCP receive, stdout
+write, EOF, and bounded close. Service events show accept, controller connect,
+method dispatch, tool dispatch, response write, message pump, and socket close.
+The absence of a matching event therefore identifies which side of the
+Codex-to-XP path stopped making progress while preserving user text.
 
 The XP dependency is intentionally pinned to the period-compatible 32-bit
 pywin32 build 220 installer. `comtypes` 1.2.1 imports on Python 3.4 and can
@@ -291,6 +308,17 @@ the stdio bridge has a bounded close. Host and XP fake-COM tests plus repeated
 live bridge sessions verified that closed clients leave only normal
 `TIME_WAIT` entries and the same XP listener remains ready for the next
 connection.
+
+Metadata-only MCP diagnostics were added on 2026-09-08. Host and XP Python
+3.4 tests verify that method/tool routing and transport progress are logged,
+while tool arguments and message text are absent. A live standalone bridge
+session verified initialize, `tools/list`, `clippy.animations`, both JSONL log
+paths, and clean return to the listener's next `accept()`. A second session
+left the connection idle for more than ten seconds and exposed the next
+transport fix: the bridge's socket retains its connect timeout, so the receive
+thread exits on idle and cannot forward a later response. Clearing that timeout
+after connection is the immediate follow-up; this diagnostics milestone does
+not change the bridge's runtime timeout behavior.
 
 Historical Word integration track
 

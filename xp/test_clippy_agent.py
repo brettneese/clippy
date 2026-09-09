@@ -103,6 +103,14 @@ class FakeSocketConnection(object):
         self.closed = True
 
 
+class RecordingDiagnostics(object):
+    def __init__(self):
+        self.entries = []
+
+    def emit(self, event, **fields):
+        self.entries.append((event, fields))
+
+
 class ClippyControllerTests(unittest.TestCase):
     def setUp(self):
         self.agent = FakeAgent()
@@ -463,6 +471,45 @@ class McpServerTests(unittest.TestCase):
 
         controller.close()
         self.assertEqual(["Clippy"], agent.Characters.unloaded)
+
+    def test_diagnostics_record_routing_without_tool_arguments(self):
+        agent = FakeAgent()
+        controller = PumpingController(lambda: agent)
+        diagnostics = RecordingDiagnostics()
+        secret_text = "diagnostic payload must stay private"
+        requests = [
+            self._initialize(),
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "clippy.speak",
+                    "arguments": {"text": secret_text},
+                },
+            },
+        ]
+        source = b"".join(
+            json.dumps(request).encode("utf-8") + b"\n" for request in requests
+        )
+
+        serve_mcp(
+            io.BytesIO(source),
+            io.BytesIO(),
+            controller,
+            diagnostics=diagnostics,
+            session_id=7,
+        )
+
+        events = [event for event, _fields in diagnostics.entries]
+        self.assertIn("controller_connect_complete", events)
+        self.assertIn("tool_call_start", events)
+        self.assertIn("tool_call_complete", events)
+        self.assertIn("mcp_response_write_complete", events)
+        self.assertIn("mcp_session_close_complete", events)
+        self.assertIn("clippy.speak", repr(diagnostics.entries))
+        self.assertNotIn(secret_text, repr(diagnostics.entries))
 
 
 if __name__ == "__main__":

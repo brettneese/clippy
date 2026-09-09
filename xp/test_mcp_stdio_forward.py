@@ -1,10 +1,14 @@
 from __future__ import print_function
 
 import io
+import json
+import os
 import socket
+import tempfile
 import threading
 import unittest
 
+from xp.mcp_diagnostics import DiagnosticLog
 from xp.mcp_stdio_forward import forward
 
 
@@ -38,6 +42,14 @@ class FakeConnection(object):
         self.receive_released.set()
 
 
+class RecordingDiagnostics(object):
+    def __init__(self):
+        self.entries = []
+
+    def emit(self, event, **fields):
+        self.entries.append((event, fields))
+
+
 class BridgeCleanupTests(unittest.TestCase):
     def test_eof_half_closes_write_and_forwards_remaining_output(self):
         connection = FakeConnection([b'{"result":"ok"}\n', b""])
@@ -60,6 +72,79 @@ class BridgeCleanupTests(unittest.TestCase):
             connection.shutdown_calls,
         )
         self.assertTrue(connection.closed)
+
+    def test_bridge_diagnostics_exclude_tool_arguments(self):
+        secret_text = "bridge payload must stay private"
+        request = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "clippy.speak",
+                "arguments": {"text": secret_text},
+            },
+        }
+        source = json.dumps(request).encode("utf-8") + b"\n"
+        diagnostics = RecordingDiagnostics()
+        connection = FakeConnection([b'{"jsonrpc":"2.0","id":1}\n', b""])
+
+        forward(
+            connection,
+            io.BytesIO(source),
+            io.BytesIO(),
+            0.05,
+            diagnostics,
+        )
+
+        self.assertIn("tools/call", repr(diagnostics.entries))
+        self.assertIn("clippy.speak", repr(diagnostics.entries))
+        self.assertNotIn(secret_text, repr(diagnostics.entries))
+        self.assertIn(
+            "bridge_stdout_write_complete",
+            [event for event, _fields in diagnostics.entries],
+        )
+
+    def test_file_diagnostics_are_jsonl_and_best_effort(self):
+        handle, path = tempfile.mkstemp()
+        os.close(handle)
+        try:
+            diagnostics = DiagnosticLog(path)
+            diagnostics.emit(
+                "test_event",
+                method="tools/list",
+                detail="line one\nline two",
+            )
+
+            with open(path, "rb") as source:
+                record = json.loads(source.read().decode("ascii"))
+
+            self.assertEqual("test_event", record["event"])
+            self.assertEqual("tools/list", record["method"])
+            self.assertEqual("line one\\nline two", record["detail"])
+            self.assertIn("timestamp", record)
+            self.assertIn("pid", record)
+        finally:
+            os.unlink(path)
+
+    def test_bridge_diagnostics_redact_unknown_routing_values(self):
+        private_method = "method containing private caller text"
+        source = json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "method": private_method}
+        ).encode("utf-8") + b"\n"
+        diagnostics = RecordingDiagnostics()
+        connection = FakeConnection([])
+
+        forward(
+            connection,
+            io.BytesIO(source),
+            io.BytesIO(),
+            0.05,
+            diagnostics,
+        )
+
+        rendered = repr(diagnostics.entries)
+        self.assertIn("'method': 'other'", rendered)
+        self.assertNotIn(private_method, rendered)
 
 
 if __name__ == "__main__":
