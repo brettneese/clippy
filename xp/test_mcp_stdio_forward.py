@@ -9,6 +9,8 @@ import threading
 import unittest
 
 from xp.mcp_diagnostics import DiagnosticLog
+from xp.mcp_stdio_forward import BRIDGE_CONNECT_TIMEOUT_SECONDS
+from xp.mcp_stdio_forward import connect_bridge
 from xp.mcp_stdio_forward import forward
 
 
@@ -19,6 +21,7 @@ class FakeConnection(object):
         self.receive_released = threading.Event()
         self.sent = []
         self.shutdown_calls = []
+        self.timeout_calls = []
         self.closed = False
 
     def recv(self, _size):
@@ -31,6 +34,9 @@ class FakeConnection(object):
 
     def sendall(self, data):
         self.sent.append(data)
+
+    def settimeout(self, value):
+        self.timeout_calls.append(value)
 
     def shutdown(self, how):
         self.shutdown_calls.append(how)
@@ -51,6 +57,33 @@ class RecordingDiagnostics(object):
 
 
 class BridgeCleanupTests(unittest.TestCase):
+    def test_connect_timeout_is_cleared_for_idle_session_receives(self):
+        connection = FakeConnection()
+        calls = []
+        diagnostics = RecordingDiagnostics()
+
+        def create_connection(address, timeout):
+            calls.append((address, timeout))
+            return connection
+
+        connected = connect_bridge(
+            "127.0.0.1",
+            3211,
+            diagnostics,
+            create_connection,
+        )
+
+        self.assertIs(connection, connected)
+        self.assertEqual(
+            [(("127.0.0.1", 3211), BRIDGE_CONNECT_TIMEOUT_SECONDS)],
+            calls,
+        )
+        self.assertEqual([None], connection.timeout_calls)
+        self.assertIn(
+            ("bridge_connect_complete", {"receive_mode": "blocking"}),
+            diagnostics.entries,
+        )
+
     def test_eof_half_closes_write_and_forwards_remaining_output(self):
         connection = FakeConnection([b'{"result":"ok"}\n', b""])
         output = io.BytesIO()

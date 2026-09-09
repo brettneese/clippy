@@ -54,7 +54,10 @@ boundary rather than an Agent lifetime boundary. It closes the disconnected
 client socket first, resets MCP lifecycle state for the next client, and keeps
 the one visible `Agent.Control.2` controller loaded until the service process
 itself exits. The SSH bridge also has a bounded two-second close path, so a
-nonresponsive server cannot leave the bridge waiting indefinitely.
+nonresponsive server cannot leave the bridge waiting indefinitely. Its
+ten-second timeout applies only while opening the TCP connection; after a
+successful connect the socket returns to blocking mode so an idle MCP session
+does not lose its response-forwarding thread.
 
 The boundary now records metadata-only JSONL diagnostics on XP. The persistent
 service appends to `C:\clippy\ClippyMcp.log`; each SSH stdio bridge appends to
@@ -314,11 +317,12 @@ Metadata-only MCP diagnostics were added on 2026-09-08. Host and XP Python
 while tool arguments and message text are absent. A live standalone bridge
 session verified initialize, `tools/list`, `clippy.animations`, both JSONL log
 paths, and clean return to the listener's next `accept()`. A second session
-left the connection idle for more than ten seconds and exposed the next
-transport fix: the bridge's socket retains its connect timeout, so the receive
-thread exits on idle and cannot forward a later response. Clearing that timeout
-after connection is the immediate follow-up; this diagnostics milestone does
-not change the bridge's runtime timeout behavior.
+left the connection idle for more than ten seconds and exposed a transport
+defect: the bridge's socket retained its connect timeout, so the receive thread
+exited on idle and could not forward a later response. The bridge now clears
+that timeout after connecting. The short connection deadline and bounded EOF
+shutdown remain unchanged, while established sessions can stay idle until
+Codex closes stdin or the XP service closes the socket.
 
 Historical Word integration track
 

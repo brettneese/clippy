@@ -883,3 +883,39 @@ was disconnected when the listener restarted. A fresh Codex app/task is
 required to launch the instrumented bridge and reproduce the earlier
 app-specific hanging tool call; the completed standalone acceptance proves the
 new logger and the underlying XP request path, not current-task reconnection.
+
+## 2026-09-08 - Keep idle MCP bridge sessions connected
+
+The first `clippy.animations` call from a freshly restarted Codex task returned
+all 43 installed animations in 0.5 seconds. After twelve idle seconds, the same
+call failed to return within a 15-second observation window. The instrumented
+bridge showed its receiver timing out at ten seconds; the next request still
+crossed TCP, and the XP service dispatched it and completed its response write,
+but no receive thread remained to forward that response to Codex.
+
+Changed the stdio bridge to retain its ten-second timeout only for
+`socket.create_connection`. Immediately after a successful connection it now
+calls `settimeout(None)`, returning established-session receives to blocking
+mode. Connection setup failure remains bounded, and the existing two-second EOF
+shutdown path remains responsible for interrupting a blocked receiver.
+
+Added a focused regression that injects the connection factory and verifies the
+ten-second connect deadline followed by `settimeout(None)`. Host verification:
+
+```text
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v \
+  xp.test_clippy_agent xp.test_mcp_stdio_forward
+=> 20 tests passed
+
+git diff --check
+=> passed
+```
+
+Copied the updated bridge and focused test to `C:\clippy\xp`. The complete XP
+Python 3.4.4 suite passed all 20 tests. After terminating only the known stale
+pre-fix bridge PID 1484, a standalone deployed bridge negotiated MCP, remained
+idle from `00:56:46Z` through `00:57:00Z`, and then returned all 43 animations.
+Its log recorded `receive_mode` `blocking`, the response reaching stdout after
+the fourteen-second idle interval, and a clean EOF/socket close with no receive
+timeout. The persistent visible listener remained PID 3016 and returned to its
+next `accept()`.

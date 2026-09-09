@@ -17,6 +17,46 @@ except (ImportError, ValueError, SystemError):
 
 
 BRIDGE_CLOSE_TIMEOUT_SECONDS = 2.0
+BRIDGE_CONNECT_TIMEOUT_SECONDS = 10.0
+
+
+def connect_bridge(
+    host,
+    port,
+    diagnostics=None,
+    create_connection=socket.create_connection,
+):
+    _emit_diagnostic(
+        diagnostics,
+        "bridge_connect_start",
+        host=host,
+        port=port,
+    )
+    connection = None
+    try:
+        connection = create_connection(
+            (host, port),
+            BRIDGE_CONNECT_TIMEOUT_SECONDS,
+        )
+        connection.settimeout(None)
+    except Exception as error:
+        _emit_diagnostic(
+            diagnostics,
+            "bridge_connect_error",
+            error_type=type(error).__name__,
+        )
+        if connection is not None:
+            try:
+                connection.close()
+            except Exception:
+                pass
+        raise
+    _emit_diagnostic(
+        diagnostics,
+        "bridge_connect_complete",
+        receive_mode="blocking",
+    )
+    return connection
 
 
 def socket_to_stdout(connection, output_stream, closing, diagnostics=None):
@@ -148,22 +188,7 @@ def main():
         sys.stderr.write("PORT must be an integer\n")
         return 2
 
-    _emit_diagnostic(
-        diagnostics,
-        "bridge_connect_start",
-        host=host,
-        port=port,
-    )
-    try:
-        connection = socket.create_connection((host, port), 10)
-    except Exception as error:
-        _emit_diagnostic(
-            diagnostics,
-            "bridge_connect_error",
-            error_type=type(error).__name__,
-        )
-        raise
-    _emit_diagnostic(diagnostics, "bridge_connect_complete")
+    connection = connect_bridge(host, port, diagnostics)
     forward(connection, diagnostics=diagnostics)
     _emit_diagnostic(diagnostics, "bridge_process_complete")
     return 0

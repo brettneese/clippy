@@ -120,6 +120,11 @@ params, tool arguments, message text, animation names supplied by a caller, or
 full MCP payloads. Log writes are best-effort and cannot write to MCP stdout or
 fail a request.
 
+The bridge allows ten seconds to establish its loopback TCP connection, then
+switches the connected socket back to blocking mode. This keeps its receive
+thread alive across idle Codex periods while preserving the two-second bounded
+shutdown after stdin closes.
+
 Read the current logs over SSH without starting another COM controller:
 
 ```text
