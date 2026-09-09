@@ -919,3 +919,70 @@ Its log recorded `receive_mode` `blocking`, the response reaching stdout after
 the fourteen-second idle interval, and a clean EOF/socket close with no receive
 timeout. The persistent visible listener remained PID 3016 and returned to its
 next `accept()`.
+
+## 2026-09-08 - Pump Agent COM while the MCP service is idle
+
+The Clippy sideshow exposed a second kind of MCP idleness after the bridge
+timeout fix. `clippy.show`, `clippy.move`, `clippy.play`, and `clippy.think`
+all returned `queued: true`, but Clippy held the `Greeting` trumpet frame until
+another MCP call arrived. The server called `PumpWaitingMessages()` only after
+dispatching a request; it otherwise blocked in the active client socket's
+`recv()` or the listener's `accept()`. Repeated harmless
+`clippy.animations` calls acted as message-loop ticks and allowed the queued
+Agent requests to advance.
+
+Changed the persistent `--mcp-tcp` path to wait for socket readability with
+`select.select()` in 50 ms intervals. Each idle interval pumps Windows messages
+on the same thread that owns `Agent.Control.2`. The active client input path
+does this between MCP lines, and the listener does the same while waiting for
+the next client, so an action can continue after a protocol session closes.
+This does not add a COM worker thread, concurrent MCP clients, tool surface, or
+payload logging. Direct `--mcp` stdio remains request-driven; Codex uses the
+fixed persistent TCP service.
+
+Added regressions for an active connection that idles and later sends
+`tools/list`, and for the persistent listener pumping before its next
+`accept()`. Host validation passed:
+
+```text
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v \
+  xp.test_clippy_agent xp.test_mcp_stdio_forward
+=> 22 tests passed
+
+PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
+  xp/clippy_agent.py xp/mcp_stdio_forward.py xp/mcp_diagnostics.py
+=> passed
+
+git diff --check
+=> passed
+```
+
+Copied `xp/clippy_agent.py` and `xp/test_clippy_agent.py` to `C:\clippy\xp`.
+The same 22 tests passed under XP's Python 3.4.4. Terminated only the known old
+Clippy owner, Agent server, and stale bridge processes, then relaunched
+`scripts\service\clippy_mcp_start.bat` from the visible UTM desktop as PID
+3652.
+
+Live acceptance opened one standalone MCP bridge, queued `show`, `move`,
+`Greeting`, and `think`, and then sent zero MCP requests for twelve seconds. A
+fresh UTM capture during that silent interval showed Clippy advance from the
+trumpet frame into the Think animation. The ordinary `tools/list` request sent
+after the pause returned successfully. After bridge EOF, a later fresh capture
+showed Clippy continuing to animate while the service waited in `accept()`.
+A second balloon-only session also held the connection silent for twelve
+seconds and visibly advanced Clippy at the requested in-bounds position.
+
+`C:\clippy\ClippyMcp.log` records no MCP requests between `01:36:18Z` and EOF
+at `01:36:30Z`, followed by clean client close and `tcp_accept_wait`. `netstat`
+showed PID 3652 listening on `127.0.0.1:3211`, two normal `TIME_WAIT` entries,
+and no `CLOSE_WAIT`. High-frequency idle pumps are intentionally not logged so
+metadata diagnostics do not grow by twenty records per second. Agent actions
+still report only that they were queued; request completion/error observation
+remains separate future work.
+
+After adding the final guard that skips idle pumping before the controller has
+connected, copied the controller to XP again and repeated the 22-test Python
+3.4.4 suite. Relaunched that exact final source from UTM as PID 2812. A fresh
+standalone probe negotiated MCP `2025-06-18`, listed all seven tools and 43
+installed animations, then closed cleanly; `netstat` showed PID 2812 listening
+with one normal `TIME_WAIT` connection and no `CLOSE_WAIT`.

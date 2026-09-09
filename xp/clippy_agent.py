@@ -1,6 +1,7 @@
 from __future__ import print_function
 
 import json
+import select
 import socket
 import sys
 
@@ -30,6 +31,7 @@ MCP_SERVER_INFO = {
     "version": "0.3.0",
 }
 MCP_NO_RESPONSE = object()
+MCP_IDLE_PUMP_INTERVAL_SECONDS = 0.05
 
 
 class ControllerError(Exception):
@@ -167,6 +169,8 @@ class ClippyController(object):
 
     def pump_messages(self):
         """Pump pending COM callbacks between synchronous controller steps."""
+        if not self.connected:
+            return
         try:
             import pythoncom
         except ImportError:
@@ -797,9 +801,14 @@ def serve_mcp_connection(
     controller,
     diagnostics=None,
     session_id=None,
+    wait_readable=None,
 ):
     """Serve one MCP client and close its socket before returning."""
-    input_stream = SocketInput(connection)
+    input_stream = SocketInput(
+        connection,
+        controller.pump_messages,
+        wait_readable,
+    )
     output_stream = SocketOutput(connection)
     try:
         serve_mcp(
@@ -850,7 +859,10 @@ def serve_mcp_socket(host, port, diagnostics=None):
                 "tcp_accept_wait",
                 next_session=session_id + 1,
             )
-            connection, address = listener.accept()
+            connection, address = _accept_with_message_pump(
+                listener,
+                active_controller,
+            )
             session_id += 1
             _emit_diagnostic(
                 active_diagnostics,
@@ -880,16 +892,41 @@ def serve_mcp_socket(host, port, diagnostics=None):
         _emit_diagnostic(active_diagnostics, "tcp_service_close_complete")
 
 
+def _wait_for_socket_readable(connection, timeout):
+    readable, _writable, _exceptional = select.select(
+        (connection,),
+        (),
+        (),
+        timeout,
+    )
+    return bool(readable)
+
+
+def _accept_with_message_pump(listener, controller, wait_readable=None):
+    waiter = wait_readable or _wait_for_socket_readable
+    while not waiter(listener, MCP_IDLE_PUMP_INTERVAL_SECONDS):
+        controller.pump_messages()
+    return listener.accept()
+
+
 class SocketInput(object):
-    def __init__(self, connection):
+    def __init__(self, connection, idle_callback=None, wait_readable=None):
         self.connection = connection
         self.buffer = b""
+        self.idle_callback = idle_callback
+        self.wait_readable = wait_readable or _wait_for_socket_readable
 
     def __iter__(self):
         return self
 
     def __next__(self):
         while b"\n" not in self.buffer:
+            if self.idle_callback is not None and not self.wait_readable(
+                self.connection,
+                MCP_IDLE_PUMP_INTERVAL_SECONDS,
+            ):
+                self.idle_callback()
+                continue
             data = self.connection.recv(4096)
             if not data:
                 if self.buffer:

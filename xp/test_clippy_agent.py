@@ -6,10 +6,12 @@ import socket
 import unittest
 
 from xp.clippy_agent import (
+    _accept_with_message_pump,
     ClippyController,
     JsonRpcServer,
     InvalidParams,
     McpServer,
+    MCP_IDLE_PUMP_INTERVAL_SECONDS,
     MCP_PROTOCOL_VERSION,
     MCP_SUPPORTED_PROTOCOL_VERSIONS,
     serve,
@@ -85,7 +87,10 @@ class PumpingController(ClippyController):
 
 class FakeSocketConnection(object):
     def __init__(self, source):
-        self.chunks = [source, b""]
+        if isinstance(source, list):
+            self.chunks = list(source)
+        else:
+            self.chunks = [source, b""]
         self.output = []
         self.shutdown_calls = []
         self.closed = False
@@ -109,6 +114,16 @@ class RecordingDiagnostics(object):
 
     def emit(self, event, **fields):
         self.entries.append((event, fields))
+
+
+class FakeListener(object):
+    def __init__(self, accepted):
+        self.accepted = accepted
+        self.accept_count = 0
+
+    def accept(self):
+        self.accept_count += 1
+        return self.accepted
 
 
 class ClippyControllerTests(unittest.TestCase):
@@ -459,8 +474,17 @@ class McpServerTests(unittest.TestCase):
         first = FakeSocketConnection(source)
         second = FakeSocketConnection(source)
 
-        serve_mcp_connection(first, controller)
-        serve_mcp_connection(second, controller)
+        always_readable = lambda _connection, _timeout: True
+        serve_mcp_connection(
+            first,
+            controller,
+            wait_readable=always_readable,
+        )
+        serve_mcp_connection(
+            second,
+            controller,
+            wait_readable=always_readable,
+        )
 
         self.assertTrue(first.closed)
         self.assertTrue(second.closed)
@@ -471,6 +495,91 @@ class McpServerTests(unittest.TestCase):
 
         controller.close()
         self.assertEqual(["Clippy"], agent.Characters.unloaded)
+
+    def test_socket_idle_pumps_controller_and_accepts_later_request(self):
+        agent = FakeAgent()
+        controller = PumpingController(lambda: agent)
+        first_requests = [
+            self._initialize(),
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "clippy.think",
+                    "arguments": {"text": "Keep pumping while idle"},
+                },
+            },
+        ]
+        first_source = b"".join(
+            json.dumps(request).encode("utf-8") + b"\n"
+            for request in first_requests
+        )
+        later_request = (
+            json.dumps(
+                {"jsonrpc": "2.0", "id": 3, "method": "tools/list"}
+            ).encode("utf-8")
+            + b"\n"
+        )
+        connection = FakeSocketConnection(
+            [first_source, later_request, b""]
+        )
+        readiness = [True, False, False, True, True]
+        wait_calls = []
+
+        def wait_readable(candidate, timeout):
+            wait_calls.append((candidate, timeout))
+            return readiness.pop(0)
+
+        serve_mcp_connection(
+            connection,
+            controller,
+            wait_readable=wait_readable,
+        )
+
+        responses = [
+            json.loads(line.decode("utf-8"))
+            for line in b"".join(connection.output).splitlines()
+        ]
+        self.assertEqual([1, 2, 3], [item["id"] for item in responses])
+        self.assertEqual(
+            [("think", "Keep pumping while idle")],
+            agent.character.calls[:1],
+        )
+        self.assertEqual(6, controller.pump_count)
+        self.assertEqual([], readiness)
+        self.assertEqual(
+            [MCP_IDLE_PUMP_INTERVAL_SECONDS] * 5,
+            [timeout for _candidate, timeout in wait_calls],
+        )
+
+    def test_listener_idle_pumps_persistent_controller_before_accept(self):
+        agent = FakeAgent()
+        controller = PumpingController(lambda: agent)
+        accepted = (object(), ("127.0.0.1", 12345))
+        listener = FakeListener(accepted)
+        readiness = [False, False, True]
+        wait_calls = []
+
+        def wait_readable(candidate, timeout):
+            wait_calls.append((candidate, timeout))
+            return readiness.pop(0)
+
+        result = _accept_with_message_pump(
+            listener,
+            controller,
+            wait_readable,
+        )
+
+        self.assertEqual(accepted, result)
+        self.assertEqual(1, listener.accept_count)
+        self.assertEqual(2, controller.pump_count)
+        self.assertEqual([], readiness)
+        self.assertEqual(
+            [MCP_IDLE_PUMP_INTERVAL_SECONDS] * 3,
+            [timeout for _candidate, timeout in wait_calls],
+        )
 
     def test_diagnostics_record_routing_without_tool_arguments(self):
         agent = FakeAgent()

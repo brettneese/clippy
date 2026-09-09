@@ -59,6 +59,15 @@ ten-second timeout applies only while opening the TCP connection; after a
 successful connect the socket returns to blocking mode so an idle MCP session
 does not lose its response-forwarding thread.
 
+The persistent TCP owner now keeps the Agent apartment responsive even when
+MCP traffic is idle. It waits for listener and client-socket readability in
+50 ms intervals and calls `pythoncom.PumpWaitingMessages()` on the COM-owning
+main thread between waits. This applies both while a client connection is open
+and while the service is waiting to accept the next client, so asynchronous
+Agent actions no longer require synthetic `clippy.animations` calls to advance.
+Direct `--mcp` stdio mode remains request-driven; the deployed Codex path uses
+the continuously pumped `--mcp-tcp` service.
+
 The boundary now records metadata-only JSONL diagnostics on XP. The persistent
 service appends to `C:\clippy\ClippyMcp.log`; each SSH stdio bridge appends to
 `C:\clippy\ClippyMcpBridge.log`. Entries correlate process, TCP session,
@@ -191,7 +200,10 @@ returning to `accept()`, while the visible Agent controller remains loaded for
 the process lifetime. The bridge waits at most two seconds for final server
 output before forcing its local socket closed. The listener remains serial and
 supports one active MCP client at a time, but it can accept successive sessions
-without per-session COM teardown or stale `CLOSE_WAIT` sockets.
+without per-session COM teardown or stale `CLOSE_WAIT` sockets. Both the active
+client read wait and the listener accept wait poll readiness every 50 ms and
+pump Agent COM on the same thread; the socket itself remains blocking for
+normal protocol I/O.
 
 The two XP JSONL logs make the transport boundary observable without copying
 MCP contents. Bridge events show stdin read, TCP send, TCP receive, stdout
@@ -323,6 +335,15 @@ exited on idle and could not forward a later response. The bridge now clears
 that timeout after connecting. The short connection deadline and bounded EOF
 shutdown remain unchanged, while established sessions can stay idle until
 Codex closes stdin or the XP service closes the socket.
+
+The same persistent service now pumps Agent COM while its MCP sockets are idle.
+Two fake-socket regressions cover an open client that pauses before a later
+request and a disconnected client followed by an idle listener. Live XP
+acceptance queued `show`, `move`, `Greeting`, and `think`, then sent no MCP
+requests for twelve seconds: Clippy advanced from the greeting into the Think
+animation, and a later `tools/list` response returned normally. Clippy also
+continued animating after that client disconnected and the listener returned
+to `accept()`.
 
 Historical Word integration track
 
