@@ -1,6 +1,6 @@
 # Clippy MCP design
 
-Status: phase 3 implemented, 2026-08-19
+Status: phase 3 implemented; disconnect cleanup hardened, 2026-09-08
 
 This specification defines the next protocol work after the completed Phase
 1/2 global Microsoft Agent foundation. It is intentionally Clippy-specific:
@@ -93,6 +93,15 @@ The server state machine is:
    serving `tools/list` or `tools/call`.
 4. `STOPPING`: close stdin/EOF, stop outstanding Agent requests where
    possible, hide the character, unload `Clippy`, and exit cleanly.
+
+For direct stdio mode, EOF still owns the whole process lifecycle and performs
+the `STOPPING` cleanup above. For persistent `--mcp-tcp` mode, bridge EOF ends
+only that MCP protocol session: the accepted socket is shut down and closed,
+the session state is discarded, and the one visible Agent controller remains
+loaded for the next client. The service hides, stops, and unloads the
+controller only when the listener process exits. Network cleanup deliberately
+precedes that final COM teardown so a slow Agent call cannot retain a dead
+client socket in `CLOSE_WAIT`.
 
 The minimal server does not advertise prompts, resources, sampling, roots,
 elicitation, tasks, logging, or `listChanged`. It must reject requests that
@@ -227,6 +236,14 @@ started from the interactive user's Startup folder. Codex launches
 forwards MCP stdin/stdout to the XP loopback listener and never creates COM.
 This preserves the visible-session requirement while allowing Codex's stdio
 MCP client to register the service with `codex mcp add clippy`.
+
+The TCP listener serves one active client at a time and reuses its single
+visible `ClippyController` across successive client sessions. Client EOF fully
+closes the accepted socket before the listener accepts again. The stdio bridge
+half-closes its write side on Codex EOF, waits up to two seconds for remaining
+server output, then fully closes the socket if the server has not finished.
+This bounds bridge shutdown and prevents closed sessions from indefinitely
+occupying the listener backlog.
 
 Protocol references consulted for this draft:
 

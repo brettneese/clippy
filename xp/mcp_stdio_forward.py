@@ -5,8 +5,10 @@ import sys
 import threading
 
 
-def socket_to_stdout(connection):
-    output_stream = sys.stdout.buffer
+BRIDGE_CLOSE_TIMEOUT_SECONDS = 2.0
+
+
+def socket_to_stdout(connection, output_stream, closing):
     try:
         while True:
             data = connection.recv(4096)
@@ -15,8 +17,52 @@ def socket_to_stdout(connection):
             output_stream.write(data)
             output_stream.flush()
     except Exception as error:
-        sys.stderr.write("Clippy MCP bridge receive error: {0}\n".format(error))
-        sys.stderr.flush()
+        if not closing.is_set():
+            sys.stderr.write("Clippy MCP bridge receive error: {0}\n".format(error))
+            sys.stderr.flush()
+
+
+def forward(
+    connection,
+    input_stream=None,
+    output_stream=None,
+    close_timeout=BRIDGE_CLOSE_TIMEOUT_SECONDS,
+):
+    active_input = input_stream if input_stream is not None else sys.stdin.buffer
+    active_output = (
+        output_stream if output_stream is not None else sys.stdout.buffer
+    )
+    closing = threading.Event()
+    receiver = threading.Thread(
+        target=socket_to_stdout,
+        args=(connection, active_output, closing),
+    )
+    receiver.daemon = True
+    receiver.start()
+
+    try:
+        while True:
+            data = active_input.readline()
+            if not data:
+                break
+            connection.sendall(data)
+    finally:
+        closing.set()
+        try:
+            connection.shutdown(socket.SHUT_WR)
+        except socket.error:
+            pass
+
+        receiver.join(close_timeout)
+        if receiver.is_alive():
+            try:
+                connection.shutdown(socket.SHUT_RDWR)
+            except socket.error:
+                pass
+
+        connection.close()
+        if receiver.is_alive():
+            receiver.join(close_timeout)
 
 
 def main():
@@ -32,24 +78,7 @@ def main():
         return 2
 
     connection = socket.create_connection((host, port), 10)
-    receiver = threading.Thread(target=socket_to_stdout, args=(connection,))
-    receiver.daemon = True
-    receiver.start()
-
-    input_stream = sys.stdin.buffer
-    try:
-        while True:
-            data = input_stream.readline()
-            if not data:
-                break
-            connection.sendall(data)
-        try:
-            connection.shutdown(socket.SHUT_WR)
-        except socket.error:
-            pass
-        receiver.join()
-    finally:
-        connection.close()
+    forward(connection)
     return 0
 
 

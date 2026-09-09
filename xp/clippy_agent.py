@@ -593,7 +593,7 @@ def _mcp_error_response(request_id, error):
     }
 
 
-def serve_mcp(stdin=None, stdout=None, controller=None):
+def serve_mcp(stdin=None, stdout=None, controller=None, close_controller=True):
     """Serve MCP over one UTF-8 JSON-RPC message per stdin line."""
     input_stream = stdin if stdin is not None else sys.stdin.buffer
     output_stream = stdout if stdout is not None else sys.stdout.buffer
@@ -645,7 +645,31 @@ def serve_mcp(stdin=None, stdout=None, controller=None):
                 break
     finally:
         server.close()
-        active_controller.close()
+        if close_controller:
+            active_controller.close()
+
+
+def _close_socket(connection):
+    try:
+        connection.shutdown(socket.SHUT_RDWR)
+    except socket.error:
+        pass
+    connection.close()
+
+
+def serve_mcp_connection(connection, controller):
+    """Serve one MCP client and close its socket before returning."""
+    input_stream = SocketInput(connection)
+    output_stream = SocketOutput(connection)
+    try:
+        serve_mcp(
+            input_stream,
+            output_stream,
+            controller,
+            close_controller=False,
+        )
+    finally:
+        _close_socket(connection)
 
 
 def serve_mcp_socket(host, port):
@@ -662,20 +686,17 @@ def serve_mcp_socket(host, port):
     )
     sys.stderr.flush()
 
+    active_controller = ClippyController()
     try:
         while True:
             connection, _address = listener.accept()
-            input_stream = SocketInput(connection)
-            output_stream = SocketOutput(connection)
             try:
-                try:
-                    serve_mcp(input_stream, output_stream)
-                except Exception as error:
-                    _log_internal_error(error)
-            finally:
-                connection.close()
+                serve_mcp_connection(connection, active_controller)
+            except Exception as error:
+                _log_internal_error(error)
     finally:
         listener.close()
+        active_controller.close()
 
 
 class SocketInput(object):

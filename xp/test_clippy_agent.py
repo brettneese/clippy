@@ -2,6 +2,7 @@ from __future__ import print_function
 
 import io
 import json
+import socket
 import unittest
 
 from xp.clippy_agent import (
@@ -13,6 +14,7 @@ from xp.clippy_agent import (
     MCP_SUPPORTED_PROTOCOL_VERSIONS,
     serve,
     serve_mcp,
+    serve_mcp_connection,
 )
 
 
@@ -79,6 +81,26 @@ class PumpingController(ClippyController):
 
     def pump_messages(self):
         self.pump_count += 1
+
+
+class FakeSocketConnection(object):
+    def __init__(self, source):
+        self.chunks = [source, b""]
+        self.output = []
+        self.shutdown_calls = []
+        self.closed = False
+
+    def recv(self, _size):
+        return self.chunks.pop(0)
+
+    def sendall(self, data):
+        self.output.append(data)
+
+    def shutdown(self, how):
+        self.shutdown_calls.append(how)
+
+    def close(self):
+        self.closed = True
 
 
 class ClippyControllerTests(unittest.TestCase):
@@ -414,6 +436,33 @@ class McpServerTests(unittest.TestCase):
         ]
         self.assertEqual(-32002, responses[0]["error"]["code"])
         self.assertEqual(-32600, responses[1]["error"]["code"])
+
+    def test_socket_disconnect_closes_client_and_preserves_controller(self):
+        agent = FakeAgent()
+        controller = ClippyController(lambda: agent)
+        requests = [
+            self._initialize(),
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        ]
+        source = b"".join(
+            json.dumps(request).encode("utf-8") + b"\n" for request in requests
+        )
+        first = FakeSocketConnection(source)
+        second = FakeSocketConnection(source)
+
+        serve_mcp_connection(first, controller)
+        serve_mcp_connection(second, controller)
+
+        self.assertTrue(first.closed)
+        self.assertTrue(second.closed)
+        self.assertEqual([socket.SHUT_RDWR], first.shutdown_calls)
+        self.assertEqual([socket.SHUT_RDWR], second.shutdown_calls)
+        self.assertEqual(1, len(agent.Characters.loaded))
+        self.assertEqual([], agent.Characters.unloaded)
+
+        controller.close()
+        self.assertEqual(["Clippy"], agent.Characters.unloaded)
 
 
 if __name__ == "__main__":

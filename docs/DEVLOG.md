@@ -773,3 +773,47 @@ The patched controller was copied to the XP VM and relaunched in the existing
 interactive desktop session without rebooting the guest or host. The current
 remaining limitation is that the live Codex task may need a fresh MCP
 inventory refresh before the newly discovered tools appear in its tool list.
+
+## 2026-09-08 - Clean MCP disconnects without tearing down Agent COM
+
+Diagnosed a live MCP listener that remained in `CLOSE_WAIT` after its first SSH
+bridge exited. `serve_mcp_socket` handled clients serially and called
+`ClippyController.close()` before closing the accepted socket, so a slow Agent
+COM hide/stop/unload path could prevent the listener from advancing to the next
+connection. A second bridge could complete the TCP handshake but never reach
+MCP handling, while another probe was refused once the one-entry backlog was
+full.
+
+The persistent TCP service now owns one `ClippyController` for its complete
+visible-process lifetime. Each accepted bridge gets independent MCP lifecycle
+state; EOF shuts down and closes that socket before returning to `accept()`,
+without unloading the shared character. Direct stdio mode keeps its existing
+EOF behavior and still hides, stops, and unloads Clippy before exit. The stdio
+bridge now waits at most two seconds for final server output after Codex closes
+stdin, then fully closes its socket rather than joining its receiver forever.
+
+Regression validation on macOS and XP Python 3.4.4:
+
+```text
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v \
+  xp.test_clippy_agent xp.test_mcp_stdio_forward
+=> 15 tests passed
+
+C:\Python34\python.exe -m unittest -v \
+  xp.test_clippy_agent xp.test_mcp_stdio_forward
+=> 15 tests passed
+```
+
+The patched listener was launched from the visible UTM XP desktop. Seven
+complete SSH bridge sessions negotiated MCP, listed all seven tools, reported
+43 installed animations, and queued visible `clippy.show` and `clippy.think`
+actions. After each bridge exited, `netstat -ano` showed only the listener plus
+normal `TIME_WAIT` entries: no `CLOSE_WAIT` remained. Repeated post-restart
+disconnect cycles kept the same listener PID 304. A fresh UTM screenshot
+visibly confirmed the real Clippit character and the thought balloon `Cleanup
+complete. I can accept a fresh MCP connection after the previous one closes.`
+
+The listener remains intentionally serial and supports one active MCP client
+at a time. This change guarantees prompt cleanup after that client closes; it
+does not add concurrent COM clients or interrupt an Agent COM call already in
+progress.

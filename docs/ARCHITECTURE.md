@@ -19,7 +19,7 @@ Keep the two eras separate:
 
 XP should contain as little modern infrastructure as possible. It acts primarily as Clippy’s body and compatibility environment.
 
-Current Status — 2026-08-19
+Current Status — 2026-09-08
 
 The original Word integration's first four milestones and first AI response
 checkpoint remain complete:
@@ -48,6 +48,13 @@ Python process is the selected phase 3 boundary: it preserves the single XP
 COM apartment and keeps the existing JSON-RPC mode available for diagnostics.
 MCP tools and lifecycle negotiation are implemented; Agent request completion
 remains queued-only until completion/error observation is added.
+
+The persistent TCP boundary now treats bridge EOF as a protocol-session
+boundary rather than an Agent lifetime boundary. It closes the disconnected
+client socket first, resets MCP lifecycle state for the next client, and keeps
+the one visible `Agent.Control.2` controller loaded until the service process
+itself exits. The SSH bridge also has a bounded two-second close path, so a
+nonresponsive server cannot leave the bridge waiting indefinitely.
 
 ┌──────────────────────────── macOS ────────────────────────────┐
 │                                                              │
@@ -165,8 +172,13 @@ XP mcp_stdio_forward.py ── TCP loopback ──> visible clippy_agent.py --mc
 The XP listener binds only to `127.0.0.1:3211` and is started by the user's
 interactive Startup entry from `scripts/service/clippy_mcp_start.bat`. The
 SSH bridge carries protocol bytes only and has no COM, shell-tool, or desktop
-control surface. A Codex MCP registration starts one bridge per session; the
-visible XP listener can accept successive connections.
+control surface. A Codex MCP registration starts one bridge per session. On
+bridge EOF, the service shuts down and closes that client socket before
+returning to `accept()`, while the visible Agent controller remains loaded for
+the process lifetime. The bridge waits at most two seconds for final server
+output before forcing its local socket closed. The listener remains serial and
+supports one active MCP client at a time, but it can accept successive sessions
+without per-session COM teardown or stale `CLOSE_WAIT` sockets.
 
 The XP dependency is intentionally pinned to the period-compatible 32-bit
 pywin32 build 220 installer. `comtypes` 1.2.1 imports on Python 3.4 and can
@@ -271,6 +283,14 @@ intentional visible handoff; and Phase 6 is final XP validation and
 documentation synchronization. Agent request completion/error observation
 must be designed before actions are represented as completed rather than
 queued.
+
+The persistent phase 3 service's disconnect lifecycle was hardened on
+2026-09-08. TCP client cleanup now precedes any final Agent teardown, the
+visible COM controller persists across successive MCP protocol sessions, and
+the stdio bridge has a bounded close. Host and XP fake-COM tests plus repeated
+live bridge sessions verified that closed clients leave only normal
+`TIME_WAIT` entries and the same XP listener remains ready for the next
+connection.
 
 Historical Word integration track
 

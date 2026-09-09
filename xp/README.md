@@ -86,3 +86,17 @@ codex mcp add clippy -- /usr/bin/ssh -T windows-xp "python -u C:\\clippy\\xp\\mc
 The visible listener must already be running before Codex starts a Clippy MCP
 session. The Codex client may need a new session after registration so the new
 server enters its tool inventory.
+
+The TCP service owns one visible `ClippyController` for its full process
+lifetime. Each SSH bridge connection receives fresh MCP lifecycle state, but
+bridge EOF closes only that client socket; it does not hide, stop, or unload
+the shared Agent character before the listener accepts the next connection.
+The controller is hidden and unloaded only when the visible TCP service exits.
+This ordering prevents a slow Agent COM teardown from leaving a disconnected
+socket in `CLOSE_WAIT` and blocking the next Codex session.
+
+On Codex stdin EOF, `mcp_stdio_forward.py` half-closes its TCP write side and
+allows two seconds for the XP service to finish its final output. If the
+service does not finish, the bridge fully closes the socket and exits instead
+of waiting forever. The TCP listener remains intentionally serial: one active
+MCP client owns Clippy at a time, while closed clients are cleaned up promptly.
