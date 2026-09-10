@@ -4,6 +4,7 @@ import json
 import select
 import socket
 import sys
+import time
 
 try:
     from .mcp_diagnostics import DiagnosticLog
@@ -28,10 +29,15 @@ MCP_PROTOCOL_VERSION = "2025-11-25"
 MCP_SUPPORTED_PROTOCOL_VERSIONS = ("2025-06-18", MCP_PROTOCOL_VERSION)
 MCP_SERVER_INFO = {
     "name": "clippy-xp-agent",
-    "version": "0.3.0",
+    "version": "0.4.0",
 }
 MCP_NO_RESPONSE = object()
 MCP_IDLE_PUMP_INTERVAL_SECONDS = 0.05
+MCP_LEASE_IDLE_SECONDS = 60.0
+MCP_LEASE_MAX_SECONDS = 300.0
+MCP_MAX_CLIENTS = 16
+MCP_MAX_SESSION_BUFFER_BYTES = 64 * 1024
+MCP_MAX_SESSION_OUTPUT_BYTES = 64 * 1024
 
 
 class ControllerError(Exception):
@@ -167,6 +173,11 @@ class ClippyController(object):
             )
         self._character.Play(animation_name)
 
+    def stop_all(self):
+        """Cancel queued Agent actions without unloading the shared character."""
+        if self._character is not None:
+            self._character.StopAll()
+
     def pump_messages(self):
         """Pump pending COM callbacks between synchronous controller steps."""
         if not self.connected:
@@ -295,6 +306,175 @@ class McpError(Exception):
         self.message = message
 
 
+class ClippyLeaseManager(object):
+    """Grant one connected MCP session at a time access to visible Clippy."""
+
+    def __init__(
+        self,
+        idle_seconds=MCP_LEASE_IDLE_SECONDS,
+        max_seconds=MCP_LEASE_MAX_SECONDS,
+        clock=None,
+        on_handoff=None,
+        diagnostics=None,
+    ):
+        self.idle_seconds = idle_seconds
+        self.max_seconds = max_seconds
+        self.clock = clock or time.monotonic
+        self.on_handoff = on_handoff
+        self.diagnostics = diagnostics
+        self.connected = set()
+        self.waiting = []
+        self.active_session = None
+        self.lease_started_at = None
+        self.last_activity_at = None
+
+    def register(self, session_id):
+        if session_id in self.connected:
+            return self.status(session_id)
+        self.connected.add(session_id)
+        self.waiting.append(session_id)
+        self._emit("lease_session_registered", session=session_id)
+        self._promote(self.clock())
+        return self.status(session_id)
+
+    def request_access(self, session_id):
+        now = self.clock()
+        self.expire(now)
+        if session_id not in self.connected:
+            raise ValueError("MCP session is not registered")
+        if session_id == self.active_session:
+            self.last_activity_at = now
+        elif session_id not in self.waiting:
+            self.waiting.append(session_id)
+            self._emit("lease_session_requeued", session=session_id)
+            self._promote(now)
+        return self.status(session_id, now)
+
+    def status(self, session_id, now=None):
+        current = self.clock() if now is None else now
+        self.expire(current)
+        if session_id == self.active_session:
+            return {
+                "status": "active",
+                "position": 0,
+                "waitingCount": len(self.waiting),
+                "idleExpiresInSeconds": self._remaining(
+                    self.last_activity_at, self.idle_seconds, current
+                ),
+                "leaseExpiresInSeconds": self._remaining(
+                    self.lease_started_at, self.max_seconds, current
+                ),
+            }
+        if session_id in self.waiting:
+            return {
+                "status": "waiting",
+                "position": self.waiting.index(session_id) + 1,
+                "waitingCount": len(self.waiting),
+            }
+        return {
+            "status": "idle",
+            "position": None,
+            "waitingCount": len(self.waiting),
+        }
+
+    def release(self, session_id):
+        if session_id == self.active_session:
+            self._end_active("explicit_release", requeue=False)
+            self._promote(self.clock())
+            return True
+        if session_id in self.waiting:
+            self.waiting.remove(session_id)
+            self._emit(
+                "lease_session_released",
+                session=session_id,
+                reason="explicit_release",
+            )
+            return True
+        return False
+
+    def disconnect(self, session_id):
+        was_active = session_id == self.active_session
+        self.connected.discard(session_id)
+        if session_id in self.waiting:
+            self.waiting.remove(session_id)
+        if was_active:
+            self._end_active("disconnect", requeue=False)
+            self._promote(self.clock())
+        else:
+            self._emit(
+                "lease_session_disconnected",
+                session=session_id,
+                was_active=False,
+            )
+
+    def expire(self, now=None):
+        current = self.clock() if now is None else now
+        if self.active_session is None:
+            self._promote(current)
+            return False
+        if not self.waiting:
+            return False
+        idle_expired = (
+            self.last_activity_at is not None
+            and current - self.last_activity_at >= self.idle_seconds
+        )
+        max_expired = (
+            self.lease_started_at is not None
+            and current - self.lease_started_at >= self.max_seconds
+        )
+        if not idle_expired and not max_expired:
+            return False
+        reason = "idle_timeout" if idle_expired else "maximum_timeout"
+        self._end_active(reason, requeue=True)
+        self._promote(current)
+        return True
+
+    def _promote(self, now):
+        if self.active_session is not None:
+            return
+        while self.waiting:
+            candidate = self.waiting.pop(0)
+            if candidate in self.connected:
+                self.active_session = candidate
+                self.lease_started_at = now
+                self.last_activity_at = now
+                self._emit("lease_session_promoted", session=candidate)
+                return
+
+    def _end_active(self, reason, requeue):
+        session_id = self.active_session
+        if session_id is None:
+            return
+        self.active_session = None
+        self.lease_started_at = None
+        self.last_activity_at = None
+        if requeue and session_id in self.connected:
+            self.waiting.append(session_id)
+        self._emit(
+            "lease_session_released",
+            session=session_id,
+            reason=reason,
+        )
+        if self.on_handoff is not None:
+            try:
+                self.on_handoff(session_id, reason)
+            except Exception as error:
+                self._emit(
+                    "lease_handoff_error",
+                    session=session_id,
+                    reason=reason,
+                    error_type=type(error).__name__,
+                )
+
+    def _remaining(self, started_at, duration, now):
+        if started_at is None:
+            return 0
+        return max(0, int(round(duration - (now - started_at))))
+
+    def _emit(self, event, **fields):
+        _emit_diagnostic(self.diagnostics, event, **fields)
+
+
 class McpServer(object):
     """Minimal MCP server for the fixed desktop-wide Clippy action surface."""
 
@@ -303,11 +483,18 @@ class McpServer(object):
     READY = "READY"
     STOPPING = "STOPPING"
 
-    def __init__(self, controller, diagnostics=None, session_id=None):
+    def __init__(
+        self,
+        controller,
+        diagnostics=None,
+        session_id=None,
+        lease_manager=None,
+    ):
         self.controller = controller
         self.state = self.STARTING
         self.diagnostics = diagnostics
         self.session_id = session_id
+        self.lease_manager = lease_manager
 
     def _emit(self, event, **fields):
         fields["session"] = self.session_id
@@ -354,7 +541,7 @@ class McpServer(object):
 
         if method == "tools/list":
             _exact_params(params, (), optional=("_meta",))
-            return {"tools": _mcp_tools()}
+            return {"tools": _mcp_tools(self.lease_manager is not None)}
 
         if method == "tools/call":
             _exact_params(
@@ -420,7 +607,7 @@ class McpServer(object):
         }
 
     def _call_tool(self, name, arguments):
-        tools = _mcp_tool_names()
+        tools = _mcp_tool_names(self.lease_manager is not None)
         if name not in tools:
             raise McpError(-32601, "Unknown tool")
 
@@ -435,20 +622,48 @@ class McpServer(object):
                     ),
                     {"animations": animations},
                 )
+            elif name == "clippy.queue_status":
+                _exact_params(arguments, ())
+                status = self.lease_manager.status(self.session_id)
+                result = _tool_success(
+                    _lease_status_summary(status),
+                    status,
+                )
+            elif name == "clippy.release":
+                _exact_params(arguments, ())
+                released = self.lease_manager.release(self.session_id)
+                status = self.lease_manager.status(self.session_id)
+                content = dict(status)
+                content["released"] = released
+                result = _tool_success(
+                    "This connection released its place in Clippy's queue."
+                    if released
+                    else "This connection did not hold a place in Clippy's queue.",
+                    content,
+                )
             elif name == "clippy.show":
                 _exact_params(arguments, ())
+                waiting = self._waiting_result(name)
+                if waiting is not None:
+                    return waiting
                 self.controller.show()
                 result = _tool_success(
                     "Clippy show request queued.", {"queued": True}
                 )
             elif name == "clippy.hide":
                 _exact_params(arguments, ())
+                waiting = self._waiting_result(name)
+                if waiting is not None:
+                    return waiting
                 self.controller.hide()
                 result = _tool_success(
                     "Clippy hide request queued.", {"queued": True}
                 )
             elif name == "clippy.move":
                 _exact_params(arguments, ("x", "y"))
+                waiting = self._waiting_result(name)
+                if waiting is not None:
+                    return waiting
                 self.controller.move(arguments["x"], arguments["y"])
                 result = _tool_success(
                     "Clippy move request queued.",
@@ -456,18 +671,27 @@ class McpServer(object):
                 )
             elif name == "clippy.speak":
                 _exact_params(arguments, ("text",))
+                waiting = self._waiting_result(name)
+                if waiting is not None:
+                    return waiting
                 self.controller.speak(arguments["text"])
                 result = _tool_success(
                     "Clippy speak request queued.", {"queued": True}
                 )
             elif name == "clippy.think":
                 _exact_params(arguments, ("text",))
+                waiting = self._waiting_result(name)
+                if waiting is not None:
+                    return waiting
                 self.controller.think(arguments["text"])
                 result = _tool_success(
                     "Clippy think request queued.", {"queued": True}
                 )
             elif name == "clippy.play":
                 _exact_params(arguments, ("animation",))
+                waiting = self._waiting_result(name)
+                if waiting is not None:
+                    return waiting
                 self.controller.play(arguments["animation"])
                 result = _tool_success(
                     "Clippy animation request queued.",
@@ -490,6 +714,25 @@ class McpServer(object):
         self._emit("tool_call_complete", tool=name)
         return result
 
+    def _waiting_result(self, tool_name):
+        if self.lease_manager is None:
+            return None
+        status = self.lease_manager.request_access(self.session_id)
+        if status["status"] == "active":
+            return None
+        self._emit(
+            "tool_call_waiting",
+            tool=tool_name,
+            queue_position=status["position"],
+        )
+        return _tool_error(
+            "Clippy is serving another connection. This connection is waiting "
+            "in position {0}; call clippy.queue_status before retrying.".format(
+                status["position"]
+            ),
+            status,
+        )
+
     def close(self):
         self.state = self.STOPPING
 
@@ -501,8 +744,8 @@ def _validate_json_rpc_id(request_id):
         raise McpError(-32600, "id must be a string, number, or null")
 
 
-def _mcp_tools():
-    return [
+def _mcp_tools(include_queue_tools=False):
+    tools = [
         {
             "name": "clippy.animations",
             "description": (
@@ -578,10 +821,40 @@ def _mcp_tools():
             },
         },
     ]
+    if include_queue_tools:
+        tools.extend(
+            [
+                {
+                    "name": "clippy.queue_status",
+                    "description": (
+                        "Report whether this MCP connection currently controls "
+                        "Clippy and, when waiting, its FIFO queue position."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": False,
+                    },
+                },
+                {
+                    "name": "clippy.release",
+                    "description": (
+                        "Release this connection's active lease or waiting-place "
+                        "so the next connected MCP session can use Clippy."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": False,
+                    },
+                },
+            ]
+        )
+    return tools
 
 
-def _mcp_tool_names():
-    return set(tool["name"] for tool in _mcp_tools())
+def _mcp_tool_names(include_queue_tools=False):
+    return set(tool["name"] for tool in _mcp_tools(include_queue_tools))
 
 
 def _tool_success(summary, structured_content):
@@ -591,12 +864,25 @@ def _tool_success(summary, structured_content):
     }
 
 
-def _tool_error(message):
+def _tool_error(message, structured_content=None):
+    content = {"error": message}
+    if structured_content is not None:
+        content.update(structured_content)
     return {
         "content": [{"type": "text", "text": message}],
-        "structuredContent": {"error": message},
+        "structuredContent": content,
         "isError": True,
     }
+
+
+def _lease_status_summary(status):
+    if status["status"] == "active":
+        return "This connection currently controls Clippy."
+    if status["status"] == "waiting":
+        return "This connection is waiting for Clippy in position {0}.".format(
+            status["position"]
+        )
+    return "This connection is not currently queued for Clippy."
 
 
 def _safe_tool_param_error(error):
@@ -634,6 +920,106 @@ def _mcp_error_response(request_id, error):
     }
 
 
+def _dispatch_mcp_line(
+    server,
+    raw_line,
+    output_stream,
+    diagnostics,
+    session_id,
+    request_sequence,
+):
+    request = None
+    request_id = None
+    has_id = False
+    is_notification = False
+    metadata = protocol_metadata(raw_line)
+    metadata.update(
+        {
+            "session": session_id,
+            "sequence": request_sequence,
+            "bytes": len(raw_line),
+        }
+    )
+    _emit_diagnostic(diagnostics, "mcp_request_received", **metadata)
+    try:
+        try:
+            request = json.loads(raw_line.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            raise McpError(-32700, "Parse error")
+
+        if isinstance(request, dict):
+            has_id = "id" in request
+            is_notification = not has_id and "method" in request
+            candidate_id = request.get("id")
+            if not isinstance(candidate_id, bool) and isinstance(
+                candidate_id, (int, float, str, type(None))
+            ):
+                request_id = candidate_id
+        _emit_diagnostic(
+            diagnostics,
+            "mcp_dispatch_start",
+            session=session_id,
+            sequence=request_sequence,
+            method=metadata.get("method"),
+            tool=metadata.get("tool"),
+            state=server.state,
+        )
+        result = server.handle(request)
+        _emit_diagnostic(
+            diagnostics,
+            "mcp_dispatch_complete",
+            session=session_id,
+            sequence=request_sequence,
+            method=metadata.get("method"),
+            tool=metadata.get("tool"),
+            state=server.state,
+        )
+        if has_id and result is not MCP_NO_RESPONSE:
+            _emit_diagnostic(
+                diagnostics,
+                "mcp_response_write_start",
+                session=session_id,
+                sequence=request_sequence,
+            )
+            _write_json(
+                output_stream,
+                {"jsonrpc": "2.0", "id": request_id, "result": result},
+            )
+            _emit_diagnostic(
+                diagnostics,
+                "mcp_response_write_complete",
+                session=session_id,
+                sequence=request_sequence,
+            )
+    except McpError as error:
+        _emit_diagnostic(
+            diagnostics,
+            "mcp_protocol_error",
+            session=session_id,
+            sequence=request_sequence,
+            error_code=error.code,
+        )
+        if not is_notification:
+            _write_json(output_stream, _mcp_error_response(request_id, error))
+    except Exception as error:
+        _emit_diagnostic(
+            diagnostics,
+            "mcp_internal_error",
+            session=session_id,
+            sequence=request_sequence,
+            error_type=type(error).__name__,
+        )
+        _log_internal_error("Unhandled MCP server error")
+        if has_id and not is_notification:
+            _write_json(
+                output_stream,
+                _mcp_error_response(
+                    request_id,
+                    McpError(-32603, "Internal MCP server error"),
+                ),
+            )
+
+
 def serve_mcp(
     stdin=None,
     stdout=None,
@@ -658,96 +1044,14 @@ def serve_mcp(
     try:
         for raw_line in input_stream:
             request_sequence += 1
-            request = None
-            request_id = None
-            has_id = False
-            is_notification = False
-            metadata = protocol_metadata(raw_line)
-            metadata.update(
-                {
-                    "session": session_id,
-                    "sequence": request_sequence,
-                    "bytes": len(raw_line),
-                }
+            _dispatch_mcp_line(
+                server,
+                raw_line,
+                output_stream,
+                diagnostics,
+                session_id,
+                request_sequence,
             )
-            _emit_diagnostic(diagnostics, "mcp_request_received", **metadata)
-            try:
-                try:
-                    request = json.loads(raw_line.decode("utf-8"))
-                except (UnicodeDecodeError, ValueError):
-                    raise McpError(-32700, "Parse error")
-
-                if isinstance(request, dict):
-                    has_id = "id" in request
-                    is_notification = not has_id and "method" in request
-                    candidate_id = request.get("id")
-                    if not isinstance(candidate_id, bool) and isinstance(
-                        candidate_id, (int, float, str, type(None))
-                    ):
-                        request_id = candidate_id
-                _emit_diagnostic(
-                    diagnostics,
-                    "mcp_dispatch_start",
-                    session=session_id,
-                    sequence=request_sequence,
-                    method=metadata.get("method"),
-                    tool=metadata.get("tool"),
-                    state=server.state,
-                )
-                result = server.handle(request)
-                _emit_diagnostic(
-                    diagnostics,
-                    "mcp_dispatch_complete",
-                    session=session_id,
-                    sequence=request_sequence,
-                    method=metadata.get("method"),
-                    tool=metadata.get("tool"),
-                    state=server.state,
-                )
-                if has_id and result is not MCP_NO_RESPONSE:
-                    _emit_diagnostic(
-                        diagnostics,
-                        "mcp_response_write_start",
-                        session=session_id,
-                        sequence=request_sequence,
-                    )
-                    _write_json(
-                        output_stream,
-                        {"jsonrpc": "2.0", "id": request_id, "result": result},
-                    )
-                    _emit_diagnostic(
-                        diagnostics,
-                        "mcp_response_write_complete",
-                        session=session_id,
-                        sequence=request_sequence,
-                    )
-            except McpError as error:
-                _emit_diagnostic(
-                    diagnostics,
-                    "mcp_protocol_error",
-                    session=session_id,
-                    sequence=request_sequence,
-                    error_code=error.code,
-                )
-                if not is_notification:
-                    _write_json(output_stream, _mcp_error_response(request_id, error))
-            except Exception as error:
-                _emit_diagnostic(
-                    diagnostics,
-                    "mcp_internal_error",
-                    session=session_id,
-                    sequence=request_sequence,
-                    error_type=type(error).__name__,
-                )
-                _log_internal_error("Unhandled MCP server error")
-                if has_id and not is_notification:
-                    _write_json(
-                        output_stream,
-                        _mcp_error_response(
-                            request_id,
-                            McpError(-32603, "Internal MCP server error"),
-                        ),
-                    )
             _emit_diagnostic(
                 diagnostics,
                 "mcp_pump_start",
@@ -823,8 +1127,257 @@ def serve_mcp_connection(
         _close_socket(connection, diagnostics, session_id)
 
 
+class BufferedSocketOutput(object):
+    """Collect MCP responses until the shared socket loop can write them."""
+
+    def __init__(self):
+        self.buffer = b""
+
+    def write(self, data):
+        if len(self.buffer) + len(data) > MCP_MAX_SESSION_OUTPUT_BYTES:
+            raise ValueError("MCP session output buffer exceeded its limit")
+        self.buffer += data
+        return len(data)
+
+    def flush(self):
+        pass
+
+    def write_to(self, connection):
+        if not self.buffer:
+            return 0
+        sent = connection.send(self.buffer)
+        if sent <= 0:
+            raise socket.error("MCP socket write returned no bytes")
+        self.buffer = self.buffer[sent:]
+        return sent
+
+
+class McpSocketSession(object):
+    """Incrementally serve one MCP protocol session on a shared event loop."""
+
+    def __init__(
+        self,
+        connection,
+        controller,
+        lease_manager,
+        diagnostics,
+        session_id,
+    ):
+        self.connection = connection
+        self.controller = controller
+        self.diagnostics = diagnostics
+        self.session_id = session_id
+        self.server = McpServer(
+            controller,
+            diagnostics,
+            session_id,
+            lease_manager,
+        )
+        self.output = BufferedSocketOutput()
+        self.buffer = b""
+        self.request_sequence = 0
+        self.closed = False
+        self.input_closed = False
+        _emit_diagnostic(
+            diagnostics,
+            "mcp_session_start",
+            session=session_id,
+            close_controller=False,
+        )
+
+    def feed(self, data):
+        if self.closed:
+            return
+        self.buffer += data
+        if len(self.buffer) > MCP_MAX_SESSION_BUFFER_BYTES:
+            raise ValueError("MCP session input buffer exceeded its limit")
+        while b"\n" in self.buffer:
+            raw_line, self.buffer = self.buffer.split(b"\n", 1)
+            self._dispatch(raw_line + b"\n")
+
+    def finish_input(self):
+        if self.closed or self.input_closed:
+            return
+        self.input_closed = True
+        if self.buffer:
+            raw_line = self.buffer
+            self.buffer = b""
+            self._dispatch(raw_line)
+        _emit_diagnostic(
+            self.diagnostics,
+            "mcp_input_eof",
+            session=self.session_id,
+            sequence=self.request_sequence,
+        )
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        _emit_diagnostic(
+            self.diagnostics,
+            "mcp_session_close_start",
+            session=self.session_id,
+            close_controller=False,
+        )
+        self.server.close()
+        _emit_diagnostic(
+            self.diagnostics,
+            "mcp_session_close_complete",
+            session=self.session_id,
+        )
+
+    def _dispatch(self, raw_line):
+        self.request_sequence += 1
+        _dispatch_mcp_line(
+            self.server,
+            raw_line,
+            self.output,
+            self.diagnostics,
+            self.session_id,
+            self.request_sequence,
+        )
+
+
+class McpSocketHub(object):
+    """Multiplex MCP sockets while leasing one persistent Clippy controller."""
+
+    def __init__(
+        self,
+        controller,
+        diagnostics=None,
+        clock=None,
+        idle_seconds=MCP_LEASE_IDLE_SECONDS,
+        max_seconds=MCP_LEASE_MAX_SECONDS,
+        max_clients=MCP_MAX_CLIENTS,
+    ):
+        self.controller = controller
+        self.diagnostics = diagnostics
+        self.max_clients = max_clients
+        self.sessions = {}
+        self.next_session_id = 1
+        self.leases = ClippyLeaseManager(
+            idle_seconds=idle_seconds,
+            max_seconds=max_seconds,
+            clock=clock,
+            on_handoff=self._reset_clippy,
+            diagnostics=diagnostics,
+        )
+
+    def connections(self):
+        return list(self.sessions.keys())
+
+    def readable_connections(self):
+        return [
+            connection
+            for connection, session in self.sessions.items()
+            if not session.input_closed
+        ]
+
+    def writable_connections(self):
+        return [
+            connection
+            for connection, session in self.sessions.items()
+            if session.output.buffer
+        ]
+
+    def add_connection(self, connection, address=("127.0.0.1", 0)):
+        if len(self.sessions) >= self.max_clients:
+            _emit_diagnostic(
+                self.diagnostics,
+                "tcp_client_rejected",
+                reason="maximum_clients",
+            )
+            _close_socket(connection, self.diagnostics)
+            return None
+
+        session_id = self.next_session_id
+        self.next_session_id += 1
+        try:
+            connection.setblocking(False)
+        except AttributeError:
+            pass
+        self.leases.register(session_id)
+        session = McpSocketSession(
+            connection,
+            self.controller,
+            self.leases,
+            self.diagnostics,
+            session_id,
+        )
+        self.sessions[connection] = session
+        peer_port = address[1] if len(address) > 1 else 0
+        _emit_diagnostic(
+            self.diagnostics,
+            "tcp_client_accepted",
+            session=session_id,
+            peer_port=peer_port,
+            queue_position=self.leases.status(session_id)["position"],
+        )
+        return session_id
+
+    def receive(self, connection, data):
+        session = self.sessions.get(connection)
+        if session is None:
+            return
+        session.feed(data)
+
+    def finish_connection(self, connection):
+        session = self.sessions.get(connection)
+        if session is None:
+            return
+        session.finish_input()
+        if not session.output.buffer:
+            self.close_connection(connection)
+
+    def flush(self, connection):
+        session = self.sessions.get(connection)
+        if session is None:
+            return
+        session.output.write_to(connection)
+        if session.input_closed and not session.output.buffer:
+            self.close_connection(connection)
+
+    def close_connection(self, connection):
+        session = self.sessions.pop(connection, None)
+        if session is None:
+            return
+        try:
+            if not session.input_closed:
+                session.finish_input()
+        except Exception as error:
+            _emit_diagnostic(
+                self.diagnostics,
+                "tcp_session_error",
+                session=session.session_id,
+                error_type=type(error).__name__,
+            )
+        finally:
+            session.close()
+            _close_socket(connection, self.diagnostics, session.session_id)
+            self.leases.disconnect(session.session_id)
+
+    def expire_leases(self):
+        return self.leases.expire()
+
+    def close(self):
+        for connection in self.connections():
+            self.close_connection(connection)
+
+    def _reset_clippy(self, session_id, reason):
+        if not self.controller.connected:
+            return
+        self.controller.stop_all()
+        _emit_diagnostic(
+            self.diagnostics,
+            "lease_clippy_reset",
+            session=session_id,
+            reason=reason,
+        )
+
+
 def serve_mcp_socket(host, port, diagnostics=None):
-    """Keep the visible XP MCP owner available to a local SSH bridge."""
+    """Serve concurrent MCP clients through one visible Clippy controller."""
     if host not in ("127.0.0.1", "localhost"):
         raise ValueError("MCP service must bind to loopback")
 
@@ -838,7 +1391,7 @@ def serve_mcp_socket(host, port, diagnostics=None):
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind((host, port))
-    listener.listen(1)
+    listener.listen(MCP_MAX_CLIENTS)
     sys.stderr.write(
         "Clippy MCP service listening on {0}:{1}\n".format(host, port)
     )
@@ -851,42 +1404,61 @@ def serve_mcp_socket(host, port, diagnostics=None):
     )
 
     active_controller = ClippyController()
-    session_id = 0
+    hub = McpSocketHub(active_controller, active_diagnostics)
     try:
         while True:
-            _emit_diagnostic(
-                active_diagnostics,
-                "tcp_accept_wait",
-                next_session=session_id + 1,
+            readers = [listener] + hub.readable_connections()
+            writers = hub.writable_connections()
+            readable, writable, _exceptional = select.select(
+                readers,
+                writers,
+                (),
+                MCP_IDLE_PUMP_INTERVAL_SECONDS,
             )
-            connection, address = _accept_with_message_pump(
-                listener,
-                active_controller,
-            )
-            session_id += 1
-            _emit_diagnostic(
-                active_diagnostics,
-                "tcp_client_accepted",
-                session=session_id,
-                peer_port=address[1],
-            )
-            try:
-                serve_mcp_connection(
-                    connection,
-                    active_controller,
-                    active_diagnostics,
-                    session_id,
-                )
-            except Exception as error:
-                _emit_diagnostic(
-                    active_diagnostics,
-                    "tcp_session_error",
-                    session=session_id,
-                    error_type=type(error).__name__,
-                )
-                _log_internal_error(error)
+            if listener in readable:
+                connection, address = listener.accept()
+                hub.add_connection(connection, address)
+            for connection in readable:
+                if connection is listener:
+                    continue
+                try:
+                    data = connection.recv(4096)
+                    if data:
+                        hub.receive(connection, data)
+                    else:
+                        hub.finish_connection(connection)
+                except Exception as error:
+                    session = hub.sessions.get(connection)
+                    _emit_diagnostic(
+                        active_diagnostics,
+                        "tcp_session_error",
+                        session=(
+                            session.session_id if session is not None else None
+                        ),
+                        error_type=type(error).__name__,
+                    )
+                    _log_internal_error(error)
+                    hub.close_connection(connection)
+            for connection in writable:
+                try:
+                    hub.flush(connection)
+                except Exception as error:
+                    session = hub.sessions.get(connection)
+                    _emit_diagnostic(
+                        active_diagnostics,
+                        "tcp_session_error",
+                        session=(
+                            session.session_id if session is not None else None
+                        ),
+                        error_type=type(error).__name__,
+                    )
+                    _log_internal_error(error)
+                    hub.close_connection(connection)
+            hub.expire_leases()
+            active_controller.pump_messages()
     finally:
         _emit_diagnostic(active_diagnostics, "tcp_service_close_start")
+        hub.close()
         listener.close()
         active_controller.close()
         _emit_diagnostic(active_diagnostics, "tcp_service_close_complete")

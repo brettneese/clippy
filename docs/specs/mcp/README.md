@@ -1,6 +1,6 @@
 # Clippy MCP design
 
-Status: phase 3 implemented; disconnect cleanup hardened, 2026-09-08
+Status: phase 3 implemented with concurrent FIFO admission, 2026-09-10
 
 This specification defines the next protocol work after the completed Phase
 1/2 global Microsoft Agent foundation. It is intentionally Clippy-specific:
@@ -64,7 +64,7 @@ The following are outside this design:
 | Phase | Status | Deliverable | Exit evidence |
 | --- | --- | --- | --- |
 | 1/2 | Complete | Persistent Python controller with show, hide, move, speak, think, runtime animation enumeration/guarding, and line JSON-RPC foundation. | XP Python 3.4.4 tests pass; visible UTM session shows Clippy, a verified animation, Think/Speak, invalid-animation rejection, and clean shutdown. |
-| 3 | Complete | Minimal MCP lifecycle, stdio framing, `tools/list`, and initial Clippy tools over the existing fixed action surface. | Python fixture tests cover initialize, capability negotiation, tool discovery/calls, notifications, malformed requests, unsupported versions, tool errors, and EOF shutdown. |
+| 3 | Complete | Minimal MCP lifecycle, stdio framing, `tools/list`, initial Clippy tools, and FIFO admission for concurrent persistent connections. | Python fixture tests cover initialize, capability negotiation, tool discovery/calls, notifications, malformed requests, unsupported versions, tool errors, EOF shutdown, queue ordering and rotation, disconnect promotion, and nonblocking partial writes. |
 | 4 | Planned | Tightly scoped read-only XP automation with an explicit confirmation gate. | Every read-only tool has an allowlist, bounded output, confirmation behavior, and a denied-path test. |
 | 5 | Planned | Word-native Office Assistant integration as a separate capability with intentional visible handoff. | User-visible XP acceptance shows the original Assistant UI; no hidden Word automation is used. |
 | 6 | Planned | Full XP validation and documentation synchronization. | Reproducible test commands, fresh screenshots/logs, architecture/devlog updates, and no generated artifacts committed. |
@@ -95,13 +95,14 @@ The server state machine is:
    possible, hide the character, unload `Clippy`, and exit cleanly.
 
 For direct stdio mode, EOF still owns the whole process lifecycle and performs
-the `STOPPING` cleanup above. For persistent `--mcp-tcp` mode, bridge EOF ends
-only that MCP protocol session: the accepted socket is shut down and closed,
-the session state is discarded, and the one visible Agent controller remains
-loaded for the next client. The service hides, stops, and unloads the
-controller only when the listener process exits. Network cleanup deliberately
-precedes that final COM teardown so a slow Agent call cannot retain a dead
-client socket in `CLOSE_WAIT`.
+the `STOPPING` cleanup above. For persistent `--mcp-tcp` mode, each accepted
+socket has an independent state machine and bridge EOF ends only that MCP
+protocol session. The service drains any buffered final response, closes the
+socket, discards that session state, and then removes its FIFO lease entry. The
+one visible Agent controller remains loaded for other clients and is hidden,
+stopped, and unloaded only when the listener process exits. Closing the socket
+before lease handoff prevents a slow Agent reset from retaining a dead client
+socket in `CLOSE_WAIT`.
 
 The minimal server does not advertise prompts, resources, sampling, roots,
 elicitation, tasks, logging, or `listChanged`. It must reject requests that
@@ -140,12 +141,21 @@ objects and descriptions that state that Agent actions are asynchronous:
 | `clippy.speak` | required non-empty string `text`, max 2000 characters | `structuredContent.queued: true`. |
 | `clippy.think` | required non-empty string `text`, max 2000 characters | `structuredContent.queued: true`. |
 | `clippy.play` | required string `animation` | Queue only if the exact name was returned by `clippy.animations`; otherwise a tool error and no COM call. |
+| `clippy.queue_status` | none | Persistent TCP mode only. Reports this connection as `active`, `waiting`, or `idle`, including FIFO position and timeout details where applicable. |
+| `clippy.release` | none | Persistent TCP mode only. Removes this connection's active lease or waiting place and promotes the next waiter when needed. |
 
 `tools/call` receives the tool name and an object of arguments. A successful
 call returns a `content` array containing a short text summary and a matching
 `structuredContent` object. Agent request completion is not implied by
 `queued: true`; until completion/error observation exists, the tool description
 and result must use that wording.
+
+The six tools that change the visible character require the connection to hold
+the persistent service's lease. A waiting call returns a normal MCP tool result
+with `isError: true`, its current FIFO `position`, and `waitingCount`; it must
+not invoke COM. `clippy.animations` and both queue tools remain available to
+every initialized connection. Direct `--mcp` stdio mode has no shared lease and
+continues to advertise only the original seven tools.
 
 Tool failures that are part of normal operation—bad arguments, an animation
 not present in the installed character, or a synchronous Agent failure—return a
@@ -237,13 +247,23 @@ forwards MCP stdin/stdout to the XP loopback listener and never creates COM.
 This preserves the visible-session requirement while allowing Codex's stdio
 MCP client to register the service with `codex mcp add clippy`.
 
-The TCP listener serves one active client at a time and reuses its single
-visible `ClippyController` across successive client sessions. Client EOF fully
-closes the accepted socket before the listener accepts again. The stdio bridge
+The TCP listener accepts at most 16 simultaneous clients and reuses one visible
+`ClippyController` across them. A single COM-owner-thread `select` loop gives
+each socket independent protocol state and nonblocking 64 KiB input/output
+buffers. Accept order defines the FIFO lease: the first client is active and
+later clients wait. Active disconnect or `clippy.release` promotes the next
+waiter. If anyone is waiting, one minute without an active visual-tool attempt
+or five minutes total rotates the active client to the tail after `StopAll`;
+the time limits never interrupt a lone client. A released connection stays
+connected but idle, and its next visual action re-enters at the queue tail.
+
+Client EOF drains buffered output and fully closes that socket before the
+lease manager resets Clippy and promotes another session. The stdio bridge
 half-closes its write side on Codex EOF, waits up to two seconds for remaining
 server output, then fully closes the socket if the server has not finished.
-This bounds bridge shutdown and prevents closed sessions from indefinitely
-occupying the listener backlog.
+This bounds bridge shutdown, prevents closed sessions from indefinitely
+occupying the listener backlog, and lets a slow bridge coexist without
+blocking other clients or Agent message pumping.
 
 Protocol references consulted for this draft:
 

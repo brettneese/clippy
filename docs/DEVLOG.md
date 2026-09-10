@@ -1,5 +1,68 @@
 # Clippy Possession development log
 
+## 2026-09-10 - concurrent MCP sessions with a FIFO Clippy lease
+
+Replaced the persistent MCP listener's serial accept/serve boundary with one
+COM-owner-thread `select` loop that serves up to 16 connected clients. Every
+socket now has independent MCP lifecycle state and bounded 64 KiB input/output
+buffers. Connections enter a FIFO lease in accept order: the active client can
+call the six visible Clippy tools, while waiting clients can initialize, list
+tools, call `clippy.animations`, inspect `clippy.queue_status`, release their
+place, and receive an immediate position-aware tool error for visual calls.
+
+Added explicit `clippy.release`, active-disconnect promotion, a one-minute idle
+limit, and a five-minute absolute limit. Time limits rotate the active session
+to the queue tail only when another client is waiting; they do not interrupt a
+lone user. Every handoff calls `StopAll` before the next user's actions, while
+network EOF drains buffered responses and closes the dead socket before that
+Agent reset. Nonblocking partial writes keep one slow bridge from stalling the
+other clients or the shared COM message pump. Direct `--mcp` stdio mode retains
+its original seven tools and process-owned lifecycle.
+
+Verified the Python implementation on macOS and under XP's Python 3.4.4:
+
+```sh
+python3 -m unittest xp.test_clippy_agent xp.test_mcp_stdio_forward
+ssh windows-xp 'cd /d C:\clippy && C:\Python34\python.exe -m unittest xp.test_clippy_agent xp.test_mcp_stdio_forward'
+```
+
+All 31 tests passed in both environments. The added cases cover FIFO ordering,
+release and requeue, idle and absolute rotation, the lone-user timeout rule,
+active disconnect, waiting-call rejection, partial nonblocking writes, and
+final-response draining after input EOF.
+
+Mirrored the final Python files to `C:\clippy\xp`, stopped only the known MCP
+service PID from Windows Key+R, and launched
+`C:\clippy\scripts\service\clippy_mcp_start.bat` from the visible UTM desktop.
+Then opened two simultaneous bridges with:
+
+```sh
+/usr/bin/ssh -T windows-xp "C:\Python34\python.exe -u C:\clippy\xp\mcp_stdio_forward.py 127.0.0.1 3211"
+```
+
+Both connections negotiated MCP `2025-06-18` against server version `0.4.0`.
+The first reported `active`; the second reported `waiting` at position 1, and
+its attempted `clippy.think` returned `isError: true` without displaying that
+text. After the first connection called `clippy.release`, the second reported
+`active` and successfully moved the real Clippy. Fresh UTM screenshots showed
+Clippy before and after that promoted action; UTM Capture Input was not used.
+Both bridge processes exited with status 0. The final transport check:
+
+```sh
+ssh windows-xp 'netstat -ano | findstr 127.0.0.1:3211'
+```
+
+showed only closed clients in `TIME_WAIT` plus the same listener on PID
+3840, with no `CLOSE_WAIT` sockets.
+
+Known limitations: Clippy remains one shared visible character and Agent
+actions still report queueing rather than completion. FIFO order is TCP accept
+order, not authenticated user identity or application-level arrival time.
+Promotion is not pushed as a server notification; a waiting client must query
+status or retry. The service refuses connections beyond 16, disconnects a
+client that exceeds either 64 KiB buffer, and has no persistence across a
+service restart.
+
 ## 2026-08-11 - user-facing balloon headings
 
 Removed transport terminology from visible Assistant copy. Successful response

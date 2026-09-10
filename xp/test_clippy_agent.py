@@ -7,6 +7,7 @@ import unittest
 
 from xp.clippy_agent import (
     _accept_with_message_pump,
+    ClippyLeaseManager,
     ClippyController,
     JsonRpcServer,
     InvalidParams,
@@ -14,6 +15,7 @@ from xp.clippy_agent import (
     MCP_IDLE_PUMP_INTERVAL_SECONDS,
     MCP_PROTOCOL_VERSION,
     MCP_SUPPORTED_PROTOCOL_VERSIONS,
+    McpSocketHub,
     serve,
     serve_mcp,
     serve_mcp_connection,
@@ -86,13 +88,15 @@ class PumpingController(ClippyController):
 
 
 class FakeSocketConnection(object):
-    def __init__(self, source):
+    def __init__(self, source, max_send=None):
         if isinstance(source, list):
             self.chunks = list(source)
         else:
             self.chunks = [source, b""]
         self.output = []
         self.shutdown_calls = []
+        self.blocking_calls = []
+        self.max_send = max_send
         self.closed = False
 
     def recv(self, _size):
@@ -100,6 +104,14 @@ class FakeSocketConnection(object):
 
     def sendall(self, data):
         self.output.append(data)
+
+    def send(self, data):
+        count = len(data) if self.max_send is None else min(self.max_send, len(data))
+        self.output.append(data[:count])
+        return count
+
+    def setblocking(self, value):
+        self.blocking_calls.append(value)
 
     def shutdown(self, how):
         self.shutdown_calls.append(how)
@@ -114,6 +126,17 @@ class RecordingDiagnostics(object):
 
     def emit(self, event, **fields):
         self.entries.append((event, fields))
+
+
+class FakeClock(object):
+    def __init__(self):
+        self.value = 0.0
+
+    def __call__(self):
+        return self.value
+
+    def advance(self, seconds):
+        self.value += seconds
 
 
 class FakeListener(object):
@@ -619,6 +642,258 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("mcp_session_close_complete", events)
         self.assertIn("clippy.speak", repr(diagnostics.entries))
         self.assertNotIn(secret_text, repr(diagnostics.entries))
+
+
+class ClippyLeaseManagerTests(unittest.TestCase):
+    def test_connections_receive_fifo_positions_and_disconnect_promotes_next(self):
+        clock = FakeClock()
+        handoffs = []
+        leases = ClippyLeaseManager(
+            clock=clock,
+            on_handoff=lambda session, reason: handoffs.append((session, reason)),
+        )
+
+        self.assertEqual("active", leases.register(1)["status"])
+        self.assertEqual(1, leases.register(2)["position"])
+        self.assertEqual(2, leases.register(3)["position"])
+
+        leases.disconnect(1)
+
+        self.assertEqual("active", leases.status(2)["status"])
+        self.assertEqual(1, leases.status(3)["position"])
+        self.assertEqual([(1, "disconnect")], handoffs)
+
+    def test_explicit_release_promotes_next_and_later_use_requeues_at_tail(self):
+        clock = FakeClock()
+        leases = ClippyLeaseManager(clock=clock)
+        leases.register(1)
+        leases.register(2)
+
+        self.assertTrue(leases.release(1))
+        self.assertEqual("idle", leases.status(1)["status"])
+        self.assertEqual("active", leases.status(2)["status"])
+
+        self.assertEqual("waiting", leases.request_access(1)["status"])
+        self.assertEqual(1, leases.status(1)["position"])
+        self.assertTrue(leases.release(2))
+        self.assertEqual("active", leases.status(1)["status"])
+
+    def test_idle_timeout_rotates_active_connection_to_queue_tail(self):
+        clock = FakeClock()
+        handoffs = []
+        leases = ClippyLeaseManager(
+            idle_seconds=60.0,
+            max_seconds=300.0,
+            clock=clock,
+            on_handoff=lambda session, reason: handoffs.append((session, reason)),
+        )
+        leases.register(1)
+        leases.register(2)
+
+        clock.advance(30.0)
+        self.assertEqual("active", leases.request_access(1)["status"])
+        clock.advance(59.0)
+        self.assertFalse(leases.expire())
+        clock.advance(1.0)
+        self.assertTrue(leases.expire())
+
+        self.assertEqual("active", leases.status(2)["status"])
+        self.assertEqual(1, leases.status(1)["position"])
+        self.assertEqual([(1, "idle_timeout")], handoffs)
+
+    def test_maximum_timeout_rotates_even_when_active_connection_is_busy(self):
+        clock = FakeClock()
+        handoffs = []
+        leases = ClippyLeaseManager(
+            idle_seconds=60.0,
+            max_seconds=300.0,
+            clock=clock,
+            on_handoff=lambda session, reason: handoffs.append((session, reason)),
+        )
+        leases.register(1)
+        leases.register(2)
+
+        for _unused in range(10):
+            clock.advance(29.9)
+            self.assertEqual("active", leases.request_access(1)["status"])
+        clock.advance(1.0)
+        self.assertTrue(leases.expire())
+
+        self.assertEqual("active", leases.status(2)["status"])
+        self.assertEqual([(1, "maximum_timeout")], handoffs)
+
+    def test_timeout_does_not_interrupt_the_only_connected_session(self):
+        clock = FakeClock()
+        handoffs = []
+        leases = ClippyLeaseManager(
+            idle_seconds=60.0,
+            max_seconds=300.0,
+            clock=clock,
+            on_handoff=lambda session, reason: handoffs.append((session, reason)),
+        )
+        leases.register(1)
+
+        clock.advance(600.0)
+
+        self.assertFalse(leases.expire())
+        self.assertEqual("active", leases.status(1)["status"])
+        self.assertEqual([], handoffs)
+
+
+class McpSocketHubTests(unittest.TestCase):
+    def _initialize(self, request_id=1):
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": "fixture", "version": "1.0"},
+            },
+        }
+
+    def _tool_call(self, request_id, name, arguments=None):
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments or {}},
+        }
+
+    def _send(self, hub, connection, *requests):
+        payload = b"".join(
+            json.dumps(request).encode("utf-8") + b"\n"
+            for request in requests
+        )
+        hub.receive(connection, payload)
+        hub.flush(connection)
+
+    def _responses(self, connection):
+        return [
+            json.loads(line.decode("utf-8"))
+            for line in b"".join(connection.output).splitlines()
+        ]
+
+    def test_two_clients_initialize_while_only_first_can_control_clippy(self):
+        agent = FakeAgent()
+        controller = PumpingController(lambda: agent)
+        diagnostics = RecordingDiagnostics()
+        hub = McpSocketHub(controller, diagnostics=diagnostics)
+        first = FakeSocketConnection([])
+        second = FakeSocketConnection([])
+        hub.add_connection(first, ("127.0.0.1", 10001))
+        hub.add_connection(second, ("127.0.0.1", 10002))
+
+        self._send(
+            hub,
+            first,
+            self._initialize(),
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+            self._tool_call(3, "clippy.speak", {"text": "First"}),
+        )
+        self._send(
+            hub,
+            second,
+            self._initialize(),
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+            self._tool_call(3, "clippy.speak", {"text": "Second"}),
+            self._tool_call(4, "clippy.queue_status"),
+        )
+
+        first_responses = self._responses(first)
+        second_responses = self._responses(second)
+        self.assertEqual([1, 2, 3], [item["id"] for item in first_responses])
+        self.assertEqual([1, 2, 3, 4], [item["id"] for item in second_responses])
+        self.assertIn(
+            "clippy.queue_status",
+            [tool["name"] for tool in second_responses[1]["result"]["tools"]],
+        )
+        self.assertTrue(second_responses[2]["result"]["isError"])
+        self.assertEqual(
+            "waiting",
+            second_responses[2]["result"]["structuredContent"]["status"],
+        )
+        self.assertEqual(
+            1,
+            second_responses[3]["result"]["structuredContent"]["position"],
+        )
+        self.assertEqual([("speak", "First")], agent.character.calls)
+
+        hub.close()
+
+    def test_active_disconnect_resets_clippy_and_promotes_waiting_client(self):
+        agent = FakeAgent()
+        controller = PumpingController(lambda: agent)
+        hub = McpSocketHub(controller)
+        first = FakeSocketConnection([])
+        second = FakeSocketConnection([])
+        hub.add_connection(first)
+        hub.add_connection(second)
+        lifecycle = [
+            self._initialize(),
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        ]
+        self._send(hub, first, *(lifecycle + [self._tool_call(2, "clippy.show")]))
+        self._send(hub, second, *lifecycle)
+
+        hub.close_connection(first)
+        self._send(hub, second, self._tool_call(2, "clippy.think", {"text": "Next"}))
+
+        self.assertTrue(first.closed)
+        self.assertEqual(
+            [("show",), ("stop_all",), ("think", "Next")],
+            agent.character.calls,
+        )
+        self.assertEqual(
+            {"queued": True},
+            self._responses(second)[1]["result"]["structuredContent"],
+        )
+
+        hub.close()
+
+    def test_slow_client_output_remains_buffered_without_blocking_other_client(self):
+        agent = FakeAgent()
+        controller = PumpingController(lambda: agent)
+        hub = McpSocketHub(controller)
+        slow = FakeSocketConnection([], max_send=1)
+        fast = FakeSocketConnection([])
+        hub.add_connection(slow)
+        hub.add_connection(fast)
+        initialize = self._initialize()
+
+        hub.receive(slow, json.dumps(initialize).encode("utf-8") + b"\n")
+        hub.receive(fast, json.dumps(initialize).encode("utf-8") + b"\n")
+        hub.flush(slow)
+        hub.flush(fast)
+
+        self.assertTrue(hub.sessions[slow].output.buffer)
+        self.assertEqual(1, len(b"".join(slow.output)))
+        self.assertEqual(1, self._responses(fast)[0]["id"])
+
+        hub.close()
+
+    def test_input_eof_flushes_final_response_before_socket_close(self):
+        agent = FakeAgent()
+        controller = PumpingController(lambda: agent)
+        hub = McpSocketHub(controller)
+        connection = FakeSocketConnection([])
+        hub.add_connection(connection)
+        request = json.dumps(self._initialize()).encode("utf-8") + b"\n"
+
+        hub.receive(connection, request)
+        hub.finish_connection(connection)
+
+        self.assertFalse(connection.closed)
+        self.assertNotIn(connection, hub.readable_connections())
+        self.assertIn(connection, hub.writable_connections())
+
+        hub.flush(connection)
+
+        self.assertTrue(connection.closed)
+        self.assertEqual(1, self._responses(connection)[0]["id"])
 
 
 if __name__ == "__main__":

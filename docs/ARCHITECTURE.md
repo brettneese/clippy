@@ -19,7 +19,7 @@ Keep the two eras separate:
 
 XP should contain as little modern infrastructure as possible. It acts primarily as Clippy’s body and compatibility environment.
 
-Current Status — 2026-09-08
+Current Status — 2026-09-10
 
 The original Word integration's first four milestones and first AI response
 checkpoint remain complete:
@@ -49,24 +49,35 @@ COM apartment and keeps the existing JSON-RPC mode available for diagnostics.
 MCP tools and lifecycle negotiation are implemented; Agent request completion
 remains queued-only until completion/error observation is added.
 
-The persistent TCP boundary now treats bridge EOF as a protocol-session
-boundary rather than an Agent lifetime boundary. It closes the disconnected
-client socket first, resets MCP lifecycle state for the next client, and keeps
-the one visible `Agent.Control.2` controller loaded until the service process
-itself exits. The SSH bridge also has a bounded two-second close path, so a
-nonresponsive server cannot leave the bridge waiting indefinitely. Its
-ten-second timeout applies only while opening the TCP connection; after a
-successful connect the socket returns to blocking mode so an idle MCP session
-does not lose its response-forwarding thread.
+The persistent TCP boundary now multiplexes up to 16 simultaneous MCP
+connections while keeping one visible `Agent.Control.2` controller on its COM
+owner thread. Each socket has independent MCP lifecycle state plus bounded
+64 KiB input and output buffers. The first accepted connection receives the
+Clippy lease and later connections wait in FIFO accept order; all connections
+can initialize, list tools, and inspect their queue position immediately.
+Visual tool calls from a waiting connection return a tool error with its queue
+position and perform no Agent call.
 
-The persistent TCP owner now keeps the Agent apartment responsive even when
-MCP traffic is idle. It waits for listener and client-socket readability in
-50 ms intervals and calls `pythoncom.PumpWaitingMessages()` on the COM-owning
-main thread between waits. This applies both while a client connection is open
-and while the service is waiting to accept the next client, so asynchronous
-Agent actions no longer require synthetic `clippy.animations` calls to advance.
-Direct `--mcp` stdio mode remains request-driven; the deployed Codex path uses
-the continuously pumped `--mcp-tcp` service.
+An active connection keeps its lease for at most five minutes, or until it has
+been inactive for one minute, while another connection is waiting. Either
+timeout rotates it to the queue tail. Explicit `clippy.release`, disconnect,
+or a timeout stops outstanding Agent actions and promotes the next connection;
+a lone active connection is not interrupted by a timeout. Bridge EOF remains
+a protocol-session boundary rather than an Agent lifetime boundary: the dead
+client socket closes before lease handoff, and the one visible controller stays
+loaded until the service process exits. The SSH bridge retains its bounded
+two-second EOF close path and uses its ten-second timeout only while opening
+the TCP connection.
+
+The persistent TCP owner keeps the Agent apartment responsive even when MCP
+traffic is idle. A single `select` loop polls the listener and every readable
+or writable client socket in 50 ms intervals, pumps
+`pythoncom.PumpWaitingMessages()` on the COM-owning main thread, and flushes
+responses incrementally. Nonblocking per-client output prevents a slow bridge
+from stalling other users or the COM message pump. Direct `--mcp` stdio mode
+remains request-driven and retains the original seven-tool behavior; the
+deployed Codex path uses the continuously pumped `--mcp-tcp` service and adds
+`clippy.queue_status` and `clippy.release`.
 
 The boundary now records metadata-only JSONL diagnostics on XP. The persistent
 service appends to `C:\clippy\ClippyMcp.log`; each SSH stdio bridge appends to
@@ -194,16 +205,23 @@ XP mcp_stdio_forward.py ── TCP loopback ──> visible clippy_agent.py --mc
 The XP listener binds only to `127.0.0.1:3211` and is started by the user's
 interactive Startup entry from `scripts/service/clippy_mcp_start.bat`. The
 SSH bridge carries protocol bytes only and has no COM, shell-tool, or desktop
-control surface. A Codex MCP registration starts one bridge per session. On
-bridge EOF, the service shuts down and closes that client socket before
-returning to `accept()`, while the visible Agent controller remains loaded for
-the process lifetime. The bridge waits at most two seconds for final server
-output before forcing its local socket closed. The listener remains serial and
-supports one active MCP client at a time, but it can accept successive sessions
-without per-session COM teardown or stale `CLOSE_WAIT` sockets. Both the active
-client read wait and the listener accept wait poll readiness every 50 ms and
-pump Agent COM on the same thread; the socket itself remains blocking for
-normal protocol I/O.
+control surface. A Codex MCP registration starts one bridge per session. The
+visible service accepts up to 16 bridges concurrently and assigns each an
+independent MCP state machine. One FIFO lease gates the six visual action
+tools; the active connection can act while waiting connections receive
+immediate position-aware tool errors. `clippy.queue_status` reports `active`,
+`waiting`, or `idle`, and `clippy.release` voluntarily gives up either the
+active lease or a waiting place. One-minute inactivity and five-minute
+absolute limits rotate the active lease only when someone is waiting.
+
+On bridge EOF, the service drains any already-buffered response, closes that
+client socket, and then performs lease handoff; the visible Agent controller
+remains loaded for the process lifetime. The bridge waits at most two seconds
+for final server output before forcing its local socket closed. One 50 ms
+`select` loop handles listener accept, nonblocking reads and writes, lease
+expiry, and Agent COM pumping on the same owner thread. Per-session input and
+output are each capped at 64 KiB so one incomplete or slow connection cannot
+consume unbounded memory or block another client.
 
 The two XP JSONL logs make the transport boundary observable without copying
 MCP contents. Bridge events show stdin read, TCP send, TCP receive, stdout
@@ -297,6 +315,21 @@ No modern coding-agent runtime needs to run on XP itself.
 Major Milestones
 
 Global Microsoft Agent host track — Phase 3 MCP complete
+
+The persistent phase 3 boundary gained concurrent FIFO admission on
+2026-09-10. One event loop now serves up to 16 independently initialized MCP
+connections while the first accepted connection alone holds the visible
+Clippy lease. Waiting callers can inspect their position or release it, and
+active disconnect, explicit release, one-minute inactivity, or the five-minute
+absolute limit promotes the next connection after stopping outstanding Agent
+actions. The time limits rotate only when another connection is waiting.
+Bounded nonblocking per-session buffers keep a slow client from stalling other
+users or the single COM owner thread. Host and XP Python 3.4 tests cover FIFO
+ordering, release/requeue, both timeout paths, disconnect promotion, partial
+writes, and EOF response draining. Two live SSH bridges initialized
+simultaneously; the waiting bridge was denied a visible action, then was
+promoted after the active bridge released Clippy and moved the real character
+on the UTM XP desktop.
 
 The desktop-wide track now has a persistent Python controller and a narrow,
 tested newline JSON-RPC adapter. The real XP acceptance covered runtime

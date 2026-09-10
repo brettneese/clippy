@@ -88,18 +88,34 @@ session. The Codex client may need a new session after registration so the new
 server enters its tool inventory.
 
 The TCP service owns one visible `ClippyController` for its full process
-lifetime. Each SSH bridge connection receives fresh MCP lifecycle state, but
-bridge EOF closes only that client socket; it does not hide, stop, or unload
-the shared Agent character before the listener accepts the next connection.
-The controller is hidden and unloaded only when the visible TCP service exits.
-This ordering prevents a slow Agent COM teardown from leaving a disconnected
-socket in `CLOSE_WAIT` and blocking the next Codex session.
+lifetime and accepts up to 16 simultaneous SSH bridges. Each connection has
+fresh MCP lifecycle state, while one FIFO lease allows only the earliest
+eligible connection to call the six tools that change visible Clippy. Every
+initialized connection can still list tools, call `clippy.animations`, inspect
+its `clippy.queue_status`, or give up its lease/queue place with
+`clippy.release`. A waiting visual call returns an immediate tool error with
+its position and performs no COM action.
+
+Active disconnect or release promotes the next waiter. When at least one user
+is waiting, one minute without a visual tool call or five minutes of total
+lease time stops outstanding Agent actions and rotates the active connection
+to the queue tail. Timeouts do not interrupt a lone connection. A released
+connection remains connected but idle and re-enters at the tail on its next
+visual call.
+
+Bridge EOF drains pending response bytes, closes only that client socket, and
+then performs any lease handoff; it does not hide or unload the shared Agent
+character. The controller is hidden and unloaded only when the visible TCP
+service exits. This ordering prevents a slow Agent reset from leaving a
+disconnected socket in `CLOSE_WAIT` and blocking the next Codex session.
 
 On Codex stdin EOF, `mcp_stdio_forward.py` half-closes its TCP write side and
 allows two seconds for the XP service to finish its final output. If the
 service does not finish, the bridge fully closes the socket and exits instead
-of waiting forever. The TCP listener remains intentionally serial: one active
-MCP client owns Clippy at a time, while closed clients are cleaned up promptly.
+of waiting forever. The visible service uses one 50 ms `select` loop for all
+clients and the Agent COM message pump. Client sockets are nonblocking and
+each input/output buffer is capped at 64 KiB, so a slow client cannot block
+other MCP sessions or Clippy animation progress.
 
 ## MCP diagnostics
 
