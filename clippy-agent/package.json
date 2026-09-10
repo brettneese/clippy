@@ -1,0 +1,32 @@
+{
+  "name": "clippy-agent",
+  "version": "0.0.0",
+  "type": "module",
+  "imports": {
+    "#*": "./agent/*",
+    "#evals/*": "./evals/*"
+  },
+  "scripts": {
+    "build": "eve build",
+    "clippy:mcp": "mcp-proxy --host 127.0.0.1 --port 3212 --server stream --no-modern -- /usr/bin/ssh -T windows-xp \"C:\\Python34\\python.exe -u C:\\clippy\\xp\\mcp_stdio_forward.py 127.0.0.1 3211\"",
+    "deploy": "eve deploy",
+    "dev": "eve dev",
+    "eval": "eve eval",
+    "start": "eve start",
+    "typecheck": "tsc"
+  },
+  "dependencies": {
+    "@vercel/connect": "1.0.0",
+    "ai": "^7.0.93",
+    "eve": "^0.53.1",
+    "mcp-proxy": "^6.7.16",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "24.x",
+    "typescript": "7.0.2"
+  },
+  "engines": {
+    "node": "24.x"
+  }
+}

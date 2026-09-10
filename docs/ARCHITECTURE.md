@@ -87,6 +87,18 @@ write, and error type. They deliberately exclude request IDs, params, tool
 arguments, message text, animation arguments, and complete protocol payloads.
 Logging is best-effort and never writes to MCP stdout.
 
+The initial eve agent under `clippy-agent/` now consumes this same boundary.
+Eve connections require Streamable HTTP or SSE rather than a spawned stdio
+server, so local development places `mcp-proxy` on macOS between eve and the
+existing SSH bridge. `agent/connections/clippy.ts` registers the fixed Clippy
+tool allowlist at `http://127.0.0.1:3212/mcp` by default; `npm run clippy:mcp`
+binds that endpoint only to loopback and launches the existing
+`mcp_stdio_forward.py` command over the `windows-xp` SSH alias. A different
+Streamable HTTP endpoint may be supplied through `CLIPPY_MCP_URL`, with an
+optional `X-API-Key` sourced from `CLIPPY_MCP_API_KEY`. A deployed eve agent
+cannot reach the Mac loopback default and therefore requires a separately
+hosted, authenticated, transport-secured endpoint.
+
 ┌──────────────────────────── macOS ────────────────────────────┐
 │                                                              │
 │  Modern AI Agent                                             │
@@ -236,6 +248,33 @@ create `Agent.Control.2`, but both dynamic and generated dispatch hung when
 setting `Connected = True` in this environment. The validated controller uses
 pywin32 and must be launched from XP's visible desktop; an SSH-launched Agent
 client can attach to a non-visible desktop or hang during connection.
+
+Eve client adapter
+
+The eve application in `clippy-agent/` uses the same XP service without adding
+another COM owner or another XP protocol. Its development path is:
+
+```text
+eve connection_search / connection tool
+             │ Streamable HTTP, 127.0.0.1:3212
+             ▼
+       macOS mcp-proxy
+             │ child-process stdio
+             ▼
+  ssh windows-xp mcp_stdio_forward.py
+             │ XP loopback TCP, 127.0.0.1:3211
+             ▼
+ visible clippy_agent.py --mcp-tcp
+```
+
+The connection allowlist repeats all nine tools published by the persistent
+service: animation enumeration, queue status and release, plus show, hide,
+move, speak, think, and guarded play. The HTTP proxy serves only the 2025-era
+Streamable HTTP protocol because the XP server currently negotiates
+`2025-06-18` or `2025-11-25`. It multiplexes eve's HTTP sessions onto one
+upstream stdio bridge, so the XP lease manager sees the proxy as one MCP
+connection; direct Codex bridges and other XP clients still participate in the
+service's normal FIFO admission.
 
 ClippyShim.dll
 

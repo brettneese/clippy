@@ -1,5 +1,59 @@
 # Clippy Possession development log
 
+## 2026-09-10 - eve agent Clippy MCP connection
+
+Added `clippy-agent/agent/connections/clippy.ts` using eve's
+`defineMcpClientConnection`. The connection describes the authentic XP
+character to `connection_search`, allowlists all nine tools exposed by the
+persistent service, defaults to the local Streamable HTTP endpoint
+`http://127.0.0.1:3212/mcp`, and supports an alternate `CLIPPY_MCP_URL` plus an
+optional `CLIPPY_MCP_API_KEY` sent as `X-API-Key`.
+
+Because eve MCP connections accept Streamable HTTP or SSE rather than stdio,
+added `mcp-proxy` 6.7.16 and the `npm run clippy:mcp` launcher. The launcher
+binds only to Mac loopback, serves the 2025-era Streamable HTTP endpoint, and
+spawns the existing `windows-xp` SSH stdio bridge. Updated the agent README and
+architecture with the startup sequence, configuration, security boundary, and
+deployment limitation.
+
+Verified the agent source and production bundle:
+
+```sh
+cd clippy-agent
+npm run typecheck
+npm run build
+```
+
+Both commands completed successfully. The build produced the ignored eve/Nitro
+output. npm reported that the current Node 26.4.0 host is newer than the
+project's declared Node 24.x engine, but typechecking and the complete build
+still passed.
+
+With the visible XP service already listening as PID 3840, started the proxy
+and sent MCP `initialize`, `notifications/initialized`, `tools/list`,
+`clippy.queue_status`, `clippy.release`, and session `DELETE` requests through
+`http://127.0.0.1:3212/mcp`. The server negotiated `2025-06-18`, identified
+itself as `clippy-xp-agent` 0.4.0, returned all nine expected tools, reported
+the proxy connection as active, released it cleanly, and accepted the HTTP
+session deletion. No visible Clippy action was invoked during this transport
+validation.
+
+Finally, ran the complete eve path in two terminals with `npm run clippy:mcp`
+and `npm run dev -- --no-ui --port 2200`, then created a local eve client
+session with the prompt `Use the Clippy connection to check Clippy's queue
+status, then report the exact status. Do not take any visible Clippy action.`
+The agent used `connection_search`, called the qualified remote queue-status
+tool, and answered that the connection was `active`, at position 0, with no
+waiting clients. Both development processes then shut down cleanly.
+
+Known limitations: the default endpoint is intentionally local-development
+only. A deployed eve runtime needs a separately reachable HTTPS endpoint with
+authentication; the optional API-key configuration supports `mcp-proxy`'s
+header scheme but does not host or tunnel the service. `mcp-proxy` multiplexes
+its downstream HTTP sessions over one upstream bridge, so XP queue ownership
+is per proxy process rather than per eve user. Agent actions still report that
+they were queued rather than observing Microsoft Agent completion.
+
 ## 2026-09-10 - concurrent MCP sessions with a FIFO Clippy lease
 
 Replaced the persistent MCP listener's serial accept/serve boundary with one
