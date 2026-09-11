@@ -96,7 +96,10 @@ define an eager and lightly playful Office Assistant voice, and make the Clippy
 MCP connection its default user-facing embodiment. Substantive work may still
 use other tools, while visible status and concise results preferentially flow
 through the authentic XP character; channel output remains the fallback when
-that character is unavailable or its lease is held elsewhere.
+that character is unavailable or its lease is held elsewhere. The standing
+behavior encourages proactive installed animations at meaningful interaction
+transitions and occasional in-bounds movement so Clippy feels physically
+present, while avoiding noisy animation chains and obstructive repositioning.
 Eve connections require Streamable HTTP or SSE rather than a spawned stdio
 server, so `mcp-proxy` on macOS sits between eve and the existing SSH bridge.
 `agent/connections/clippy.ts` registers the fixed Clippy tool allowlist at the

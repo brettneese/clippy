@@ -1227,3 +1227,26 @@ cd clippy-agent && npm run build
 git diff --check
 => passed
 ```
+
+## 2026-09-11 - Encourage Clippy animation and movement
+
+Expanded the eve agent's standing Clippy MCP behavior so the character uses
+installed animations proactively at meaningful moments such as greeting,
+thinking, explaining, celebrating, and saying goodbye. Added guidance to move
+to varied, sensible on-screen positions between phases of longer work so Clippy
+feels physically present instead of remaining parked in one location. The
+instructions still avoid animation spam, constant movement, invented animation
+names, and positions likely to obstruct the user's work.
+
+Validation:
+
+```text
+cd clippy-agent && npm run typecheck
+=> passed
+
+cd clippy-agent && npm run build
+=> passed; eve compiled the updated system instructions into the local output
+
+git diff --check
+=> passed
+```
