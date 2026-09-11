@@ -18,24 +18,34 @@ Add capabilities under `agent/`, including tools, connections, channels, skills,
 
 ## Connect to the authentic Clippy MCP server
 
-The Clippy connection targets a local Streamable HTTP endpoint at
-`http://127.0.0.1:3212/mcp`. From the Mac host, start the transport proxy in a
-separate terminal before running the agent:
+The Clippy connection targets the public Streamable HTTP endpoint at
+`https://pleasing-unicorn-legally.ngrok-free.app/mcp`. Start the transport
+proxy on the Mac host in a separate terminal before running the agent:
 
 ```bash
 npm run clippy:mcp
 ```
 
-The proxy launches the repository's SSH stdio bridge, which connects to the
-persistent Microsoft Agent controller on the visible Windows XP desktop. The
-XP service must already be listening on `127.0.0.1:3211`; see
+Keep an ngrok tunnel forwarding that loopback listener in another terminal:
+
+```bash
+ngrok http 3212
+```
+
+The configured ngrok domain must forward to `http://127.0.0.1:3212`. The proxy
+accepts modern MCP requests from eve and translates them to the legacy MCP
+version negotiated by the repository's SSH stdio bridge. The bridge connects
+to the persistent Microsoft Agent controller on the visible Windows XP
+desktop. The XP service must already be listening on `127.0.0.1:3211`; see
 [`../xp/README.md`](../xp/README.md) for its setup and lifecycle.
 
-Set `CLIPPY_MCP_URL` when the Streamable HTTP endpoint is somewhere else. If
-that endpoint is protected by `mcp-proxy --apiKey`, set the matching
-`CLIPPY_MCP_API_KEY`; the connection sends it in the `X-API-Key` header. Never
-expose this desktop-control endpoint publicly without transport security and
-authentication.
+Set `CLIPPY_MCP_URL=http://127.0.0.1:3212/mcp` to bypass ngrok for local-only
+development, or use another Streamable HTTP endpoint. If the proxy is
+protected with `MCP_PROXY_API_KEY` (or `mcp-proxy --apiKey`), set the same value
+as `CLIPPY_MCP_API_KEY`; the connection sends it in the `X-API-Key` header.
+The checked-in public URL is transport-secured but is not authenticated unless
+that API key is configured. Do not leave this desktop-control endpoint public
+without authentication.
 
 ## Learn more
 

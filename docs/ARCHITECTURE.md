@@ -89,15 +89,17 @@ Logging is best-effort and never writes to MCP stdout.
 
 The initial eve agent under `clippy-agent/` now consumes this same boundary.
 Eve connections require Streamable HTTP or SSE rather than a spawned stdio
-server, so local development places `mcp-proxy` on macOS between eve and the
-existing SSH bridge. `agent/connections/clippy.ts` registers the fixed Clippy
-tool allowlist at `http://127.0.0.1:3212/mcp` by default; `npm run clippy:mcp`
-binds that endpoint only to loopback and launches the existing
-`mcp_stdio_forward.py` command over the `windows-xp` SSH alias. A different
-Streamable HTTP endpoint may be supplied through `CLIPPY_MCP_URL`, with an
-optional `X-API-Key` sourced from `CLIPPY_MCP_API_KEY`. A deployed eve agent
-cannot reach the Mac loopback default and therefore requires a separately
-hosted, authenticated, transport-secured endpoint.
+server, so `mcp-proxy` on macOS sits between eve and the existing SSH bridge.
+`agent/connections/clippy.ts` registers the fixed Clippy tool allowlist at the
+ngrok HTTPS endpoint by default. ngrok forwards to the proxy's loopback-only
+listener at `http://127.0.0.1:3212/mcp`; `npm run clippy:mcp` launches the
+existing `mcp_stdio_forward.py` command over the `windows-xp` SSH alias. The
+proxy accepts modern `2026-07-28` Streamable HTTP from eve while independently
+negotiating the XP server's legacy MCP version upstream. A different endpoint,
+including the direct loopback URL for local-only use, may be supplied through
+`CLIPPY_MCP_URL`, with an optional `X-API-Key` sourced from
+`CLIPPY_MCP_API_KEY`. The public tunnel must be authenticated with
+`MCP_PROXY_API_KEY` before it is treated as a durable deployment boundary.
 
 ┌──────────────────────────── macOS ────────────────────────────┐
 │                                                              │
@@ -256,7 +258,10 @@ another COM owner or another XP protocol. Its development path is:
 
 ```text
 eve connection_search / connection tool
-             │ Streamable HTTP, 127.0.0.1:3212
+             │ modern Streamable HTTP, HTTPS
+             ▼
+      ngrok public tunnel
+             │ HTTP, 127.0.0.1:3212
              ▼
        macOS mcp-proxy
              │ child-process stdio
@@ -269,12 +274,14 @@ eve connection_search / connection tool
 
 The connection allowlist repeats all nine tools published by the persistent
 service: animation enumeration, queue status and release, plus show, hide,
-move, speak, think, and guarded play. The HTTP proxy serves only the 2025-era
-Streamable HTTP protocol because the XP server currently negotiates
-`2025-06-18` or `2025-11-25`. It multiplexes eve's HTTP sessions onto one
-upstream stdio bridge, so the XP lease manager sees the proxy as one MCP
-connection; direct Codex bridges and other XP clients still participate in the
-service's normal FIFO admission.
+move, speak, think, and guarded play. The HTTP proxy deliberately keeps its
+downstream and upstream protocol negotiations separate: eve can use modern
+`2026-07-28` request/response POSTs even though the XP server currently
+negotiates `2025-06-18` or `2025-11-25`. This avoids the legacy session GET
+whose response headers can remain buffered by an HTTP/2 tunnel. The proxy
+multiplexes eve's HTTP requests onto one upstream stdio bridge, so the XP lease
+manager sees the proxy as one MCP connection; direct Codex bridges and other XP
+clients still participate in the service's normal FIFO admission.
 
 ClippyShim.dll
 

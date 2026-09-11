@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "eve build",
-    "clippy:mcp": "mcp-proxy --host 127.0.0.1 --port 3212 --server stream --no-modern -- /usr/bin/ssh -T windows-xp \"C:\\Python34\\python.exe -u C:\\clippy\\xp\\mcp_stdio_forward.py 127.0.0.1 3211\"",
+    "clippy:mcp": "mcp-proxy --host 127.0.0.1 --port 3212 --server stream -- /usr/bin/ssh -T windows-xp \"C:\\Python34\\python.exe -u C:\\clippy\\xp\\mcp_stdio_forward.py 127.0.0.1 3211\"",
     "deploy": "eve deploy",
     "dev": "eve dev",
     "eval": "eve eval",

@@ -1,5 +1,48 @@
 # Clippy Possession development log
 
+## 2026-09-10 - modern MCP downstream through ngrok
+
+Changed the eve Clippy connection default to
+`https://pleasing-unicorn-legally.ngrok-free.app/mcp` and removed
+`--no-modern` from the `npm run clippy:mcp` launcher. The proxy now negotiates
+modern Streamable HTTP with eve independently of the legacy MCP version used by
+the unchanged XP stdio bridge. Updated the agent README and architecture to
+record the ngrok hop, protocol split, local override, and authentication
+boundary.
+
+Restarted only the existing Clippy proxy while leaving ngrok, eve, and the XP
+service running. Then exercised the public URL with the same compiled AI SDK
+MCP client used by eve: `createMCPClient` connected in 788 ms, negotiated MCP
+`2026-07-28`, identified `clippy-xp-agent` 0.4.0, listed all nine tools, and
+called the read-only `clippy.queue_status` tool successfully. The XP service
+reported an active lease at queue position 0 with no waiting clients. ngrok's
+local inspection API showed three successful MCP POSTs for this run and no
+session GET, confirming that the request no longer enters the HTTP/2-buffered
+legacy event stream that previously hung.
+
+The already-running `eve dev` server reloaded the connection change. Sent it
+`Use the Clippy connection to check Clippy's queue status, then report the exact
+status. Do not take any visible Clippy action.` through `eve/client`; the full
+agent turn completed its tool work in 5.3 seconds and reported `active`, queue
+position 0, and no waiting clients. The matching tunnel trace again contained
+only successful modern MCP POSTs.
+
+Verified the checked-in agent after the change:
+
+```sh
+cd clippy-agent
+npm run typecheck
+npm run build
+```
+
+Both commands completed successfully. No visible Clippy action was invoked.
+
+Known limitation: the public ngrok URL is HTTPS but is unauthenticated unless
+the proxy is started with `MCP_PROXY_API_KEY` and eve receives the matching
+`CLIPPY_MCP_API_KEY`. The hostname also depends on the current ngrok tunnel or
+reserved-domain configuration. The proxy still multiplexes downstream traffic
+over one XP bridge, so XP lease ownership remains per proxy process.
+
 ## 2026-09-10 - eve agent Clippy MCP connection
 
 Added `clippy-agent/agent/connections/clippy.ts` using eve's
