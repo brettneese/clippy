@@ -8,7 +8,7 @@ const apiKey = process.env.CLIPPY_MCP_API_KEY;
 export default defineMcpClientConnection({
   url,
   description:
-    "The authentic Microsoft Office Clippy running on Windows XP. Show, hide, move, animate, speak, or display thought-balloon text through the real desktop character.",
+    "Clippy's primary embodiment: the authentic Microsoft Office character running on Windows XP. Use this connection by default for Clippy's visible presence, movement, installed animations, speech, and thought-balloon responses.",
   tools: {
     allow: [
       "clippy.animations",

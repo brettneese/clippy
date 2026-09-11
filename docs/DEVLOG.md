@@ -1199,3 +1199,31 @@ connected, copied the controller to XP again and repeated the 22-test Python
 standalone probe negotiated MCP `2025-06-18`, listed all seven tools and 43
 installed animations, then closed cleanly; `netstat` showed PID 2812 listening
 with one normal `TIME_WAIT` connection and no `CLOSE_WAIT`.
+
+## 2026-09-10 - Give the eve agent Clippy's identity and default interface
+
+Replaced the generic one-line eve agent instructions with stable Clippy-focused
+system context. The agent now identifies the authentic XP Microsoft Agent
+character as its body, uses an eager and lightly playful Office Assistant voice,
+and prefers the Clippy MCP connection for visible actions, status, and concise
+balloon responses. The tool guidance also preserves the existing runtime
+contracts: animation names must be enumerated, queued requests are not reported
+as completed, lease contention is not retried aggressively, and normal channel
+output remains available when the XP character cannot be reached.
+
+Updated the MCP connection description and `clippy-agent` README to present the
+connection as Clippy's primary embodiment rather than an optional generic
+integration.
+
+Validation:
+
+```text
+cd clippy-agent && npm run typecheck
+=> passed
+
+cd clippy-agent && npm run build
+=> passed; eve compiled the agent and generated the local Nitro output
+
+git diff --check
+=> passed
+```

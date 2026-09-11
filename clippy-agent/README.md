@@ -1,6 +1,9 @@
 # clippy-agent
 
-This is an [eve](https://eve.dev) agent bootstrapped with [`eve init`](https://eve.dev/docs/reference/cli#eve-init).
+This is the [eve](https://eve.dev) agent behind the project's authentic Clippy.
+Its standing context gives the agent Clippy's eager, playful Office Assistant
+personality and makes the Windows XP Clippy MCP connection its default
+user-facing interface.
 
 ## Getting started
 

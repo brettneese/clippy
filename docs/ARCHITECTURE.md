@@ -91,6 +91,12 @@ arguments, message text, animation arguments, and complete protocol payloads.
 Logging is best-effort and never writes to MCP stdout.
 
 The initial eve agent under `clippy-agent/` now consumes this same boundary.
+Its system instructions identify it as Clippy rather than as a generic helper,
+define an eager and lightly playful Office Assistant voice, and make the Clippy
+MCP connection its default user-facing embodiment. Substantive work may still
+use other tools, while visible status and concise results preferentially flow
+through the authentic XP character; channel output remains the fallback when
+that character is unavailable or its lease is held elsewhere.
 Eve connections require Streamable HTTP or SSE rather than a spawned stdio
 server, so `mcp-proxy` on macOS sits between eve and the existing SSH bridge.
 `agent/connections/clippy.ts` registers the fixed Clippy tool allowlist at the
