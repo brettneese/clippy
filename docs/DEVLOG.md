@@ -1,27 +1,5 @@
 # Clippy Possession development log
 
-## 2026-09-10 - route eve Clippy connection through ngrok
-
-Changed the default URL in `clippy-agent/agent/connections/clippy.ts` from the
-Mac loopback endpoint to
-`https://pleasing-unicorn-legally.ngrok-free.app/mcp`. The `/mcp` suffix is the
-Streamable HTTP route served by the existing `mcp-proxy`; the ngrok endpoint
-forwards to that proxy on `127.0.0.1:3212`. `CLIPPY_MCP_URL` remains available
-as an override, including for direct local development. Updated the agent
-README and architecture to describe the tunnel hop and access-control boundary.
-
-Started `npm run clippy:mcp`, then sent `initialize`,
-`notifications/initialized`, `tools/list`, and session `DELETE` through the
-public HTTPS URL without ngrok's browser-warning bypass header. The endpoint
-returned HTTP 200, negotiated MCP `2025-06-18` with `clippy-xp-agent` 0.4.0,
-listed all nine expected Clippy tools, and deleted the session cleanly. No
-visible Clippy action was called. The proxy was stopped after validation.
-
-Known limitation: the stable ngrok URL is now the default but the tunnel and
-local proxy must both be running. The connection supports an `X-API-Key`
-through `CLIPPY_MCP_API_KEY`, but the tested endpoint did not require one; it
-should not remain publicly reachable without an access-control layer.
-
 ## 2026-09-10 - eve agent Clippy MCP connection
 
 Added `clippy-agent/agent/connections/clippy.ts` using eve's

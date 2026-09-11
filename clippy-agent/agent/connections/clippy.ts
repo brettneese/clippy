@@ -1,8 +1,6 @@
 import { defineMcpClientConnection } from "eve/connections";
 
-const url =
-  process.env.CLIPPY_MCP_URL ??
-  "https://pleasing-unicorn-legally.ngrok-free.app/mcp";
+const url = process.env.CLIPPY_MCP_URL ?? "http://127.0.0.1:3212/mcp";
 const apiKey = process.env.CLIPPY_MCP_API_KEY;
 
 export default defineMcpClientConnection({

@@ -18,10 +18,9 @@ Add capabilities under `agent/`, including tools, connections, channels, skills,
 
 ## Connect to the authentic Clippy MCP server
 
-The Clippy connection targets the Streamable HTTP endpoint at
-`https://pleasing-unicorn-legally.ngrok-free.app/mcp`. That ngrok tunnel must
-forward to `http://127.0.0.1:3212` on the Mac host. Start the transport proxy in
-a separate terminal before running the agent:
+The Clippy connection targets a local Streamable HTTP endpoint at
+`http://127.0.0.1:3212/mcp`. From the Mac host, start the transport proxy in a
+separate terminal before running the agent:
 
 ```bash
 npm run clippy:mcp
@@ -32,9 +31,8 @@ persistent Microsoft Agent controller on the visible Windows XP desktop. The
 XP service must already be listening on `127.0.0.1:3211`; see
 [`../xp/README.md`](../xp/README.md) for its setup and lifecycle.
 
-Set `CLIPPY_MCP_URL=http://127.0.0.1:3212/mcp` to bypass the tunnel during
-local-only development, or set it to another Streamable HTTP endpoint. If the
-endpoint is protected by `mcp-proxy --apiKey`, set the matching
+Set `CLIPPY_MCP_URL` when the Streamable HTTP endpoint is somewhere else. If
+that endpoint is protected by `mcp-proxy --apiKey`, set the matching
 `CLIPPY_MCP_API_KEY`; the connection sends it in the `X-API-Key` header. Never
 expose this desktop-control endpoint publicly without transport security and
 authentication.

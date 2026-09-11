@@ -89,15 +89,15 @@ Logging is best-effort and never writes to MCP stdout.
 
 The initial eve agent under `clippy-agent/` now consumes this same boundary.
 Eve connections require Streamable HTTP or SSE rather than a spawned stdio
-server, so `mcp-proxy` on macOS sits between eve and the existing SSH bridge.
-`agent/connections/clippy.ts` registers the fixed Clippy tool allowlist at
-`https://pleasing-unicorn-legally.ngrok-free.app/mcp` by default. The ngrok
-tunnel forwards to the loopback-only proxy at `http://127.0.0.1:3212`, while
-`npm run clippy:mcp` launches the existing `mcp_stdio_forward.py` command over
-the `windows-xp` SSH alias. A different Streamable HTTP endpoint may be
-supplied through `CLIPPY_MCP_URL`, with an optional `X-API-Key` sourced from
-`CLIPPY_MCP_API_KEY`. The public endpoint must remain transport-secured and
-should be protected with the proxy API key or an equivalent access control.
+server, so local development places `mcp-proxy` on macOS between eve and the
+existing SSH bridge. `agent/connections/clippy.ts` registers the fixed Clippy
+tool allowlist at `http://127.0.0.1:3212/mcp` by default; `npm run clippy:mcp`
+binds that endpoint only to loopback and launches the existing
+`mcp_stdio_forward.py` command over the `windows-xp` SSH alias. A different
+Streamable HTTP endpoint may be supplied through `CLIPPY_MCP_URL`, with an
+optional `X-API-Key` sourced from `CLIPPY_MCP_API_KEY`. A deployed eve agent
+cannot reach the Mac loopback default and therefore requires a separately
+hosted, authenticated, transport-secured endpoint.
 
 ┌──────────────────────────── macOS ────────────────────────────┐
 │                                                              │
@@ -256,10 +256,7 @@ another COM owner or another XP protocol. Its development path is:
 
 ```text
 eve connection_search / connection tool
-             │ Streamable HTTPS, ngrok
-             ▼
-        ngrok tunnel
-             │ HTTP, 127.0.0.1:3212
+             │ Streamable HTTP, 127.0.0.1:3212
              ▼
        macOS mcp-proxy
              │ child-process stdio
