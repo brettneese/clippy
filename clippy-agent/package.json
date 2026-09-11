@@ -16,7 +16,7 @@
     "typecheck": "tsc"
   },
   "dependencies": {
-    "@vercel/connect": "1.0.0",
+    "@vercel/connect": "^2.0.4",
     "ai": "^7.0.93",
     "eve": "^0.53.1",
     "mcp-proxy": "^6.7.16",
