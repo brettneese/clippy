@@ -140,7 +140,7 @@ objects and descriptions that state that Agent actions are asynchronous:
 | `clippy.move` | required integer `x`, `y`; each from -32768 through 32767 | `structuredContent: {"queued":true,"x":x,"y":y}`. |
 | `clippy.speak` | required non-empty string `text`, max 2000 characters | `structuredContent.queued: true`. |
 | `clippy.think` | required non-empty string `text`, max 2000 characters | `structuredContent.queued: true`. |
-| `clippy.play` | required string `animation` | Queue only if the exact name was returned by `clippy.animations`; otherwise a tool error and no COM call. |
+| `clippy.play` | required string `animation` | Queue only if the exact name was returned by `clippy.animations`; otherwise a tool error and no COM call. Known repeating animations are stopped after two seconds so later queued actions can advance. |
 | `clippy.queue_status` | none | Persistent TCP mode only. Reports this connection as `active`, `waiting`, or `idle`, including FIFO position and timeout details where applicable. |
 | `clippy.release` | none | Persistent TCP mode only. Removes this connection's active lease or waiting place and promotes the next waiter when needed. |
 
@@ -156,6 +156,16 @@ with `isError: true`, its current FIFO `position`, and `waitingCount`; it must
 not invoke COM. `clippy.animations` and both queue tools remain available to
 every initialized connection. Direct `--mcp` stdio mode has no shared lease and
 continues to advertise only the original seven tools.
+
+Microsoft Agent serializes its asynchronous character requests. The installed
+`CheckingSomething`, `GetTechy`, `Searching`, `Thinking`, and `Writing`
+animations repeat rather than completing on their own. The controller retains
+the request object returned for each of those exact runtime animation names;
+its existing 50 ms COM message pump stops that specific request after two
+seconds. This keeps the animation visibly active for a bounded interval while
+preserving any speech, movement, visibility, or other animation already queued
+behind it. Non-repeating animations retain their native duration and Agent
+queue order.
 
 Tool failures that are part of normal operation—bad arguments, an animation
 not present in the installed character, or a synchronous Agent failure—return a

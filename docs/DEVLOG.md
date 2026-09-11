@@ -1,5 +1,58 @@
 # Clippy Possession development log
 
+## 2026-09-10 - Bound repeating MCP animations without flushing later actions
+
+Diagnosed a live MCP run that appeared to stop after
+`clippy.play animation="Searching"`. The metadata-only XP service and bridge
+logs showed that the MCP request and its successful tool result crossed the
+entire transport; later `clippy.speak` calls were also accepted. The visible
+stall was inside Microsoft Agent's serialized animation queue: `Searching` is
+a repeating animation, while the MCP contract reports only that `Play` was
+queued and previously had no rule for ending a repeating request.
+
+Updated `ClippyController` to retain the request objects returned for the
+installed repeating `CheckingSomething`, `GetTechy`, `Searching`, `Thinking`,
+and `Writing` animations. The existing 50 ms COM message pump now stops each
+specific request after two seconds. This gives the selected animation visible
+runtime and releases actions queued behind it without `StopAll` flushing
+speech, movement, visibility changes, or later animations. Finite animations
+retain their native Microsoft Agent duration and queue behavior.
+
+Validation:
+
+```text
+python3 -m unittest -v xp.test_clippy_agent xp.test_mcp_stdio_forward
+=> Ran 33 tests; OK
+
+scp xp/clippy_agent.py xp/test_clippy_agent.py windows-xp:'C:/clippy/xp/'
+ssh windows-xp \
+  'cd /d C:\clippy && python -m unittest -v xp.test_clippy_agent xp.test_mcp_stdio_forward'
+=> Ran 33 tests under XP Python 3.4.4; OK
+```
+
+After terminating only the verified old TCP service PID, relaunched
+`C:\clippy\scripts\service\clippy_mcp_start.bat` with Windows Key->R on the
+visible XP desktop. A standalone MCP session then queued `clippy.show`,
+`clippy.play` with `Searching`, and a unique `clippy.speak` message while
+holding the bridge open. Fresh UTM screenshots first showed the Search
+animation and then showed the queued `The search loop cleared and this queued
+speech appeared.` balloon after the two-second cutoff. UTM Capture Input was
+not used. All four MCP requests returned successful protocol responses, and
+`netstat` showed the replacement visible service listening on
+`127.0.0.1:3211` as PID 3756. After the final cleanup-only source mirror, UTM's
+Run dialog did not accept simulated Enter, so XP's `at /interactive` launched
+the already-installed service batch on the visible session. Two one-minute
+jobs overlapped when the first fired late; process creation times and service
+logs identified both exact controller processes, and only the unused second
+duplicate PID 1096 was terminated. The final state has no scheduled jobs,
+exactly one controller/listener PID 3712, and one `agentsvr.exe` process.
+
+Remaining limitation: the two-second bound begins when the Agent request is
+queued, not from a `RequestStart` callback, and MCP still does not surface
+asynchronous Agent completion or failure. A repeating animation placed behind
+a long pre-existing Agent queue can therefore receive less visible time than
+the bound; completion-event observation remains separate follow-up work.
+
 ## 2026-09-10 - modern MCP downstream through ngrok
 
 Changed the eve Clippy connection default to

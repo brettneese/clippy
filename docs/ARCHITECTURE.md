@@ -47,7 +47,10 @@ it is not the component boundary for global Clippy control. Direct MCP in the
 Python process is the selected phase 3 boundary: it preserves the single XP
 COM apartment and keeps the existing JSON-RPC mode available for diagnostics.
 MCP tools and lifecycle negotiation are implemented; Agent request completion
-remains queued-only until completion/error observation is added.
+remains queued-only until completion/error observation is added. Known
+repeating animations are now bounded to two seconds by retaining and stopping
+their individual Agent request objects, so they remain visible without holding
+later queued actions indefinitely.
 
 The persistent TCP boundary now multiplexes up to 16 simultaneous MCP
 connections while keeping one visible `Agent.Control.2` controller on its COM
@@ -188,7 +191,12 @@ validated, extra parameters are rejected, and the adapter contains no shell,
 filesystem, window-input, or generic COM invocation feature. Microsoft Agent
 actions are asynchronous; a `{"queued":true}` result means the COM call
 returned without a synchronous error, not that the animation request later
-completed successfully.
+completed successfully. The installed `CheckingSomething`, `GetTechy`,
+`Searching`, `Thinking`, and `Writing` animations repeat indefinitely. The
+controller retains those request objects and its COM message pump stops each
+specific request after two seconds, giving the animation visible runtime
+without letting it block later queued actions. Other animations keep their
+native Agent-defined duration and queue order.
 
 With `python -u xp\clippy_agent.py --mcp`, the same controller serves MCP
 protocol version `2025-11-25` over newline-delimited UTF-8 stdio. It requires

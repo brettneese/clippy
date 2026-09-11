@@ -38,6 +38,16 @@ MCP_LEASE_MAX_SECONDS = 300.0
 MCP_MAX_CLIENTS = 16
 MCP_MAX_SESSION_BUFFER_BYTES = 64 * 1024
 MCP_MAX_SESSION_OUTPUT_BYTES = 64 * 1024
+LOOPING_ANIMATION_NAMES = frozenset(
+    (
+        "CheckingSomething",
+        "GetTechy",
+        "Searching",
+        "Thinking",
+        "Writing",
+    )
+)
+LOOPING_ANIMATION_DURATION_SECONDS = 2.0
 
 
 class ControllerError(Exception):
@@ -71,13 +81,15 @@ def create_agent_control():
 class ClippyController(object):
     """Own one persistent Microsoft Agent character for this process."""
 
-    def __init__(self, agent_factory=None):
+    def __init__(self, agent_factory=None, clock=None):
         self._agent_factory = agent_factory or create_agent_control
+        self._clock = clock or time.time
         self._agent = None
         self._characters = None
         self._character = None
         self._animation_names = ()
         self._animation_name_set = set()
+        self._looping_animation_requests = []
 
     @property
     def connected(self):
@@ -112,6 +124,7 @@ class ClippyController(object):
         self._character = character
         self._animation_names = names
         self._animation_name_set = set(names)
+        self._looping_animation_requests = []
 
     def close(self):
         if self._character is not None:
@@ -131,6 +144,7 @@ class ClippyController(object):
 
         self._animation_names = ()
         self._animation_name_set = set()
+        self._looping_animation_requests = []
         self._character = None
         self._characters = None
         self._agent = None
@@ -171,12 +185,20 @@ class ClippyController(object):
                     animation_name
                 )
             )
-        self._character.Play(animation_name)
+        request = self._character.Play(animation_name)
+        if animation_name in LOOPING_ANIMATION_NAMES:
+            self._looping_animation_requests.append(
+                (
+                    request,
+                    self._clock() + LOOPING_ANIMATION_DURATION_SECONDS,
+                )
+            )
 
     def stop_all(self):
         """Cancel queued Agent actions without unloading the shared character."""
         if self._character is not None:
             self._character.StopAll()
+        self._looping_animation_requests = []
 
     def pump_messages(self):
         """Pump pending COM callbacks between synchronous controller steps."""
@@ -185,8 +207,31 @@ class ClippyController(object):
         try:
             import pythoncom
         except ImportError:
+            pythoncom = None
+        if pythoncom is not None:
+            pythoncom.PumpWaitingMessages()
+        self._expire_looping_animations()
+
+    def _expire_looping_animations(self):
+        if not self._looping_animation_requests:
             return
-        pythoncom.PumpWaitingMessages()
+        now = self._clock()
+        pending = []
+        for request, deadline in self._looping_animation_requests:
+            if now < deadline:
+                pending.append((request, deadline))
+                continue
+            try:
+                if request is None:
+                    self._character.StopAll("Play")
+                else:
+                    self._character.Stop(request)
+            except Exception:
+                try:
+                    self._character.StopAll("Play")
+                except Exception:
+                    pass
+        self._looping_animation_requests = pending
 
     def _require_connected(self):
         if not self.connected:

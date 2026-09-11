@@ -27,6 +27,11 @@ class FakeBalloon(object):
         self.Style = None
 
 
+class FakeRequest(object):
+    def __init__(self, animation):
+        self.animation = animation
+
+
 class FakeCharacter(object):
     def __init__(self):
         self.AnimationNames = ["Greeting", "Thinking", "Wave"]
@@ -50,9 +55,16 @@ class FakeCharacter(object):
 
     def Play(self, animation):
         self.calls.append(("play", animation))
+        return FakeRequest(animation)
 
-    def StopAll(self):
-        self.calls.append(("stop_all",))
+    def Stop(self, request):
+        self.calls.append(("stop", request.animation))
+
+    def StopAll(self, request_type=None):
+        if request_type is None:
+            self.calls.append(("stop_all",))
+        else:
+            self.calls.append(("stop_all", request_type))
 
 
 class FakeCharacters(object):
@@ -219,6 +231,49 @@ class ClippyControllerTests(unittest.TestCase):
         self.assertNotIn(
             ("play", "DefinitelyNotInstalled"), self.agent.character.calls
         )
+
+    def test_looping_animation_runs_for_two_seconds_then_stops(self):
+        clock = FakeClock()
+        agent = FakeAgent()
+        controller = ClippyController(lambda: agent, clock=clock)
+        controller.connect()
+        controller.play("Thinking")
+        controller.speak("Finished")
+
+        clock.advance(1.9)
+        controller.pump_messages()
+        self.assertEqual(
+            [("play", "Thinking"), ("speak", "Finished")],
+            agent.character.calls,
+        )
+
+        clock.advance(0.1)
+        controller.pump_messages()
+        self.assertEqual(
+            [
+                ("play", "Thinking"),
+                ("speak", "Finished"),
+                ("stop", "Thinking"),
+            ],
+            agent.character.calls,
+        )
+        controller.close()
+
+    def test_normal_animation_is_not_stopped_by_idle_pump(self):
+        clock = FakeClock()
+        agent = FakeAgent()
+        controller = ClippyController(lambda: agent, clock=clock)
+        controller.connect()
+        controller.play("Greeting")
+        controller.speak("Hello")
+
+        clock.advance(10.0)
+        controller.pump_messages()
+        self.assertEqual(
+            [("play", "Greeting"), ("speak", "Hello")],
+            agent.character.calls,
+        )
+        controller.close()
 
     def test_rejects_extra_params_and_invalid_coordinates(self):
         server = JsonRpcServer(self.controller)

@@ -42,6 +42,11 @@ Character actions are asynchronous Microsoft Agent requests. A successful
 JSON-RPC result means the request was queued without a synchronous COM error;
 Phase 1 does not yet report Agent request completion. `clippy.play` accepts
 only names enumerated from the loaded `CLIPPIT.ACS` during that process.
+The installed `CheckingSomething`, `GetTechy`, `Searching`, `Thinking`, and
+`Writing` animations repeat indefinitely, so the controller retains each
+request object and stops that specific request after two seconds. This gives a
+repeating animation visible runtime while allowing later queued actions to
+advance; ordinary animations keep their native Agent-defined duration.
 Batch arrays are deliberately rejected; the foundation accepts exactly one
 request object per input line.
 
