@@ -1250,3 +1250,26 @@ cd clippy-agent && npm run build
 git diff --check
 => passed
 ```
+
+## 2026-09-11 - Tell Clippy to put on a show
+
+Removed the restrained animation and movement guidance from the eve agent's
+standing context. Clippy is now directed to make visible entrances, animate
+frequently, combine fitting installed animations into expressive sequences,
+roam among conspicuous screen positions, and keep performing through longer
+tasks. The intended behavior is an attention-commanding desktop character, not
+a subtle or non-disruptive status widget. Existing animation enumeration,
+queued-request, and lease semantics remain unchanged.
+
+Validation:
+
+```text
+cd clippy-agent && npm run typecheck
+=> passed
+
+cd clippy-agent && npm run build
+=> passed; eve compiled the show-focused system instructions into local output
+
+git diff --check
+=> passed
+```
