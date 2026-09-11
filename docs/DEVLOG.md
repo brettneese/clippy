@@ -1294,3 +1294,24 @@ cd clippy-agent && npm run build
 git diff --check
 => passed
 ```
+
+## 2026-09-11 - Keep Clippy's show near center stage
+
+Refined the eve agent's movement guidance so Clippy keeps his theatrical motion
+within the middle of the page. Entrances, task transitions, and multipart story
+movements may vary within that central area, but the character now returns
+toward center instead of roaming to the screen edges. Animation frequency and
+the show-focused behavior remain unchanged.
+
+Validation:
+
+```text
+cd clippy-agent && npm run typecheck
+=> passed
+
+cd clippy-agent && npm run build
+=> passed; eve compiled the center-stage movement instructions into local output
+
+git diff --check
+=> passed
+```
