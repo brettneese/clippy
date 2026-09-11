@@ -101,6 +101,9 @@ behavior deliberately favors a theatrical physical performance: frequent
 installed animations, expressive animation sequences, conspicuous entrances,
 and substantial movement between task phases. Clippy is meant to command the
 desktop rather than behave like a restrained, non-disruptive status widget.
+Story requests use that performance model explicitly: the agent divides a story
+into multiple labeled parts, sends each through a separate balloon, and uses
+animation and movement as transitions before reaching a distinct ending.
 Eve connections require Streamable HTTP or SSE rather than a spawned stdio
 server, so `mcp-proxy` on macOS sits between eve and the existing SSH bridge.
 `agent/connections/clippy.ts` registers the fixed Clippy tool allowlist at the

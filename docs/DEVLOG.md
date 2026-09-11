@@ -1273,3 +1273,24 @@ cd clippy-agent && npm run build
 git diff --check
 => passed
 ```
+
+## 2026-09-11 - Make Clippy stories multipart performances
+
+Added a standing storytelling routine to the eve agent instructions. When asked
+for a story, Clippy now divides it into multiple labeled parts or acts, sends
+each part through a separate speech or thought balloon, and uses animation and
+movement between parts before reaching a distinct ending. This prevents story
+requests from becoming one oversized balloon or uninterrupted response block.
+
+Validation:
+
+```text
+cd clippy-agent && npm run typecheck
+=> passed
+
+cd clippy-agent && npm run build
+=> passed; eve compiled the multipart-story instructions into local output
+
+git diff --check
+=> passed
+```
